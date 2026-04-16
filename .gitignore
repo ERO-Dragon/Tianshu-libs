@@ -21,3 +21,78 @@
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
+# ============================
+# Java 编译输出文件
+# ============================
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# 编译输出目录
+target/
+build/
+bin/
+out/
+gen/
+
+# IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Eclipse
+.classpath
+.project
+.settings/
+.cxx/
+.externalToolBuilders/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+.mvn/
+mvnw
+mvnw.cmd
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+*.log
+*.tmp
+*.bak
+*.swp
+*.cache
+
+logs/
+log/
+temp/
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+application-dev.yml
+application-dev.properties
+application-local.yml
+application-local.properties
+*.local
+.env
+.env.*
