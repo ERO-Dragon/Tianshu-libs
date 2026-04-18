@@ -1,9 +1,10 @@
 plugins {
     id("java")
+    id("com.gradleup.shadow") version "9.3.2"
 }
 
 group = "com.rheinmetal"
-version = "1.0-SNAPSHOT"
+version = "v1.0.0"
 
 repositories {
     mavenCentral()
@@ -11,6 +12,11 @@ repositories {
 
 dependencies {
     implementation(files("libs/argeo-jjml.jar"))
+    implementation("io.javalin:javalin:5.6.3")
+    // compileOnly("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.slf4j:slf4j-api:2.0.9")
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.9")
     testImplementation(platform("org.junit:junit-bom:6.0.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -18,4 +24,24 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.shadowJar {
+    // exclude("com/google/gson/**")
+    mergeServiceFiles()
+    archiveBaseName.set("JavaLlamaServer")
+    archiveClassifier.set("all")
+    manifest {
+        attributes["Main-Class"] = "com.javallamaserver.core.ServerApp"
+        attributes["Automatic-Module-Name"] = "com.rheinmetal.javallamaserver"
+    }
+}
+
+tasks.build {
+    dependsOn(tasks.shadowJar)
 }
