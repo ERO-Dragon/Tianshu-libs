@@ -4,16 +4,15 @@ plugins {
 }
 
 group = "com.rheinmetal"
-version = "v1.0.0"
+version = "v1.0.1"
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    implementation(files("libs/argeo-jjml.jar"))
+    implementation(files("libs/org.argeo.jjml-2.1.2.0006-7f18908.jar"))
     implementation("io.javalin:javalin:5.6.3")
-    // compileOnly("com.google.code.gson:gson:2.10.1")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.slf4j:slf4j-api:2.0.9")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.9")
@@ -38,7 +37,6 @@ tasks.shadowJar {
     archiveClassifier.set("all")
     manifest {
         attributes["Main-Class"] = "com.javallamaserver.core.ServerApp"
-        attributes["Automatic-Module-Name"] = "com.rheinmetal.javallamaserver"
     }
 }
 

@@ -1,5 +1,6 @@
 package com.javallamaserver.core;
 
+import com.javallamaserver.llm.InferenceTask;
 import com.javallamaserver.llm.LlamaEngine;
 import com.javallamaserver.web.ChatController;
 import com.javallamaserver.web.ChatController.ChatRequest;
@@ -106,6 +107,8 @@ public class ServerApp {
                 // 2. 🌟 终极解法：ctx.future() 彻底挂起 Javalin 生命周期
                 ctx.future(() -> {
                     java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();
+                    // 用于在连接断开时取消任务
+                    final InferenceTask[] currentTask = new InferenceTask[1];
                     try {
                         java.io.OutputStream out = ctx.res().getOutputStream();
 
@@ -114,6 +117,11 @@ public class ServerApp {
                                 out.write(("data: " + data + "\n\n").getBytes("UTF-8"));
                                 out.flush();
                             } catch (Exception e) {
+                                // 连接断开，取消推理任务
+                                System.err.println("[ServerApp] SSE connection broken, cancelling task...");
+                                if (currentTask[0] != null) {
+                                    currentTask[0].cancel();
+                                }
                                 future.completeExceptionally(e);
                             }
                         };
@@ -126,7 +134,7 @@ public class ServerApp {
                             future.complete(null);
                         };
 
-                        chatController.handleStreamChatRaw(request, sender, doneRunner);
+                        currentTask[0] = chatController.handleStreamChatRaw(request, sender, doneRunner);
                     } catch (Exception e) {
                         future.completeExceptionally(e);
                     }
@@ -163,7 +171,36 @@ public class ServerApp {
         System.out.println("[ServerApp]   GET  /health");
         System.out.println("[ServerApp]   GET  /v1/models");
 
-        //startConsoleChat(host, port);
+        // startConsoleChat(host, port);
+        
+        // ==========================================
+        // 【防孤儿守护】：检测父进程是否存活
+        // ==========================================
+        String parentPidStr = System.getenv("PARENT_PID");
+        if (parentPidStr != null) {
+            try {
+                long parentPid = Long.parseLong(parentPidStr);
+                Thread watchdog = new Thread(() -> {
+                    System.out.println("[ServerApp] Watchdog started. Monitoring parent PID: " + parentPid);
+                    while (true) {
+                        try {
+                            Thread.sleep(5000); // 每 5 秒检查一次
+                            // 询问操作系统：这个 PID 还在吗？
+                            if (!ProcessHandle.of(parentPid).isPresent()) {
+                                System.err.println("[ServerApp] Parent process (MC) is dead! Initiating suicide to release VRAM...");
+                                System.exit(0); // 这会 100% 触发下面的 gpu-cleanup-hook
+                            }
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                }, "parent-watchdog");
+                watchdog.setDaemon(true); // 设为守护线程，不阻止 JVM 正常退出
+                watchdog.start();
+            } catch (NumberFormatException ignored) {}
+        } else {
+            System.out.println("[ServerApp] PARENT_PID not set. Running in standalone mode.");
+        }
     }
 
     private static void startConsoleChat(String host, int port) {

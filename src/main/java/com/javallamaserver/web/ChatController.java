@@ -57,7 +57,7 @@ public class ChatController {
         }
     }
 
-    public void handleStreamChatRaw(ChatRequest request, Consumer<String> dataSender, Runnable doneSender) {
+    public InferenceTask handleStreamChatRaw(ChatRequest request, Consumer<String> dataSender, Runnable doneSender) {
         String completionId = "chatcmpl-" + UUID.randomUUID().toString().substring(0, 8);
         long created = System.currentTimeMillis() / 1000;
         String model = LlamaEngine.getInstance().getModelAlias();
@@ -80,24 +80,21 @@ public class ChatController {
         LlamaEngine.getInstance().submitTask(task);
 
         task.getSyncFuture().whenComplete((fullText, throwable) -> {
-            if (throwable != null) {
-                System.err.println("[ChatController] Task failed: " + throwable.getMessage());
+            // 【修复点】：如果是被取消的，或者抛异常了，直接走 doneSender 结束，绝对不发数据
+            if (task.isCancelled() || throwable != null) {
+                doneSender.run();
+                return;
             }
+            // 只有正常走完的，才发收尾包
             try {
-                String stopChunkJson = gson.toJson(new StreamChunk(
-                        completionId, created, model,
-                        new StreamChunk.StreamChoice(0, new StreamChunk.Delta(null), "stop")
-                ));
+                String stopChunkJson = gson.toJson(new StreamChunk(completionId, created, model, new StreamChunk.StreamChoice(0, new StreamChunk.Delta(null), "stop")));
                 dataSender.accept(stopChunkJson);
-
-                String usageChunkJson = gson.toJson(new UsageChunk(
-                        completionId, created, model, new UsageInfo(0, 0, 0)
-                ));
+                String usageChunkJson = gson.toJson(new UsageChunk(completionId, created, model, new UsageInfo(0, 0, 0)));
                 dataSender.accept(usageChunkJson);
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
             doneSender.run();
         });
+        return task;
     }
 
     private void handleSyncChat(Context ctx, ChatRequest request) {
