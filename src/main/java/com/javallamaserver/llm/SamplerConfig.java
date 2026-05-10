@@ -12,6 +12,7 @@ public class SamplerConfig {
     private int penaltyLastN = 64;
     private String grammarStr = null;
     private String grammarRoot = "root";
+    private boolean enableThinking = false;
 
     public float getTemperature() { return temperature; }
     public void setTemperature(float temperature) { this.temperature = temperature; }
@@ -44,4 +45,7 @@ public class SamplerConfig {
     public void setGrammarRoot(String grammarRoot) { this.grammarRoot = grammarRoot; }
 
     public boolean hasGrammar() { return grammarStr != null && !grammarStr.isEmpty(); }
+
+    public boolean isEnableThinking() { return enableThinking; }
+    public void setEnableThinking(boolean enableThinking) { this.enableThinking = enableThinking; }
 }

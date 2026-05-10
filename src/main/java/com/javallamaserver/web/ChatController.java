@@ -2,10 +2,13 @@ package com.javallamaserver.web;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
 import com.google.gson.annotations.SerializedName;
+import com.javallamaserver.llm.EmbeddingEngine;
 import com.javallamaserver.llm.InferenceTask;
 import com.javallamaserver.llm.LlamaEngine;
 import com.javallamaserver.llm.SamplerConfig;
+import com.javallamaserver.rag.RagService;
 import io.javalin.http.Context;
 import io.javalin.http.Handler;
 import org.argeo.jjml.llm.LlamaCppChatMessage;
@@ -13,11 +16,37 @@ import org.argeo.jjml.llm.LlamaCppChatMessage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 public class ChatController {
 
     private static final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    private final LlamaEngine chatEngine;
+    private final EmbeddingEngine embeddingEngine;
+    private final RagService ragService;
+    private final int requestTimeoutSeconds;
+
+    public ChatController(LlamaEngine chatEngine) {
+        this(chatEngine, null, null, 300);
+    }
+
+    public ChatController(LlamaEngine chatEngine, EmbeddingEngine embeddingEngine, RagService ragService) {
+        this(chatEngine, embeddingEngine, ragService, 300);
+    }
+
+    public ChatController(LlamaEngine chatEngine, EmbeddingEngine embeddingEngine, RagService ragService, int requestTimeoutSeconds) {
+        this.chatEngine = chatEngine;
+        this.embeddingEngine = embeddingEngine;
+        this.ragService = ragService;
+        this.requestTimeoutSeconds = Math.max(1, requestTimeoutSeconds);
+    }
+
+    public boolean hasQueueCapacity() {
+        return chatEngine.hasQueueCapacity();
+    }
 
     public Handler syncHandler() {
         return ctx -> {
@@ -60,24 +89,30 @@ public class ChatController {
     public InferenceTask handleStreamChatRaw(ChatRequest request, Consumer<String> dataSender, Runnable doneSender) {
         String completionId = "chatcmpl-" + UUID.randomUUID().toString().substring(0, 8);
         long created = System.currentTimeMillis() / 1000;
-        String model = LlamaEngine.getInstance().getModelAlias();
+        String model = chatEngine.getModelAlias();
 
-        List<LlamaCppChatMessage> messages = convertMessages(request.messages);
+        List<LlamaCppChatMessage> messages = convertMessages(augmentMessages(request), request.thinking);
+        SamplerConfig samplerConfig = buildSamplerConfig(request);
 
-        SamplerConfig samplerConfig = new SamplerConfig();
-        if (request.temperature != null) {
-            samplerConfig.setTemperature(request.temperature);
-        }
-
-        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, token -> {
+        int maxTokens = normalizeMaxTokens(request.max_tokens);
+        ReasoningCleaner cleaner = new ReasoningCleaner();
+        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, maxTokens, token -> {
+            String cleanedToken = cleaner.feed(token);
+            if (cleanedToken.isEmpty()) return;
             String chunkJson = gson.toJson(new StreamChunk(
                     completionId, created, model,
-                    new StreamChunk.StreamChoice(0, new StreamChunk.Delta(token), null)
+                    new StreamChunk.StreamChoice(0, new StreamChunk.Delta(cleanedToken), null)
             ));
             dataSender.accept(chunkJson);
         });
 
-        LlamaEngine.getInstance().submitTask(task);
+        try {
+            chatEngine.submitTask(task);
+        } catch (RejectedExecutionException e) {
+            dataSender.accept(gson.toJson(new ErrorResponse("inference queue is full")));
+            doneSender.run();
+            return task;
+        }
 
         task.getSyncFuture().whenComplete((fullText, throwable) -> {
             // 【修复点】：如果是被取消的，或者抛异常了，直接走 doneSender 结束，绝对不发数据
@@ -97,23 +132,31 @@ public class ChatController {
         return task;
     }
 
-    private void handleSyncChat(Context ctx, ChatRequest request) {
+    public void handleSyncChat(Context ctx, ChatRequest request) {
         String completionId = "chatcmpl-" + UUID.randomUUID().toString().substring(0, 8);
         long created = System.currentTimeMillis() / 1000;
-        String model = LlamaEngine.getInstance().getModelAlias();
+        String model = chatEngine.getModelAlias();
 
-        List<LlamaCppChatMessage> messages = convertMessages(request.messages);
+        List<LlamaCppChatMessage> messages = convertMessages(augmentMessages(request), request.thinking);
+        SamplerConfig samplerConfig = buildSamplerConfig(request);
 
-        SamplerConfig samplerConfig = new SamplerConfig();
-        if (request.temperature != null) {
-            samplerConfig.setTemperature(request.temperature);
+        int maxTokens = normalizeMaxTokens(request.max_tokens);
+        if (!chatEngine.hasQueueCapacity()) {
+            ctx.status(429);
+            ctx.result(gson.toJson(new ErrorResponse("inference queue is full")));
+            return;
+        }
+        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, maxTokens, null);
+        try {
+            chatEngine.submitTask(task);
+        } catch (RejectedExecutionException e) {
+            ctx.status(429);
+            ctx.result(gson.toJson(new ErrorResponse("inference queue is full")));
+            return;
         }
 
-        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, null);
-        LlamaEngine.getInstance().submitTask(task);
-
         try {
-            String fullText = task.getSyncFuture().get();
+            String fullText = ReasoningCleaner.clean(task.getSyncFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS)).trim();
             ChatResponse response = new ChatResponse(
                     completionId, created, model,
                     List.of(new ChatResponse.ChatChoice(
@@ -125,18 +168,218 @@ public class ChatController {
             );
             ctx.contentType("application/json");
             ctx.result(gson.toJson(response));
+        } catch (TimeoutException e) {
+            task.cancel();
+            ctx.status(504);
+            ctx.result(gson.toJson(new ErrorResponse("request timed out")));
+        } catch (RejectedExecutionException e) {
+            ctx.status(429);
+            ctx.result(gson.toJson(new ErrorResponse("inference queue is full")));
         } catch (Exception e) {
             ctx.status(500);
-            ctx.result("{\"error\": \"" + e.getMessage() + "\"}");
+            ctx.result(gson.toJson(new ErrorResponse(e.getMessage())));
         }
     }
 
-    private List<LlamaCppChatMessage> convertMessages(List<ChatMessage> chatMessages) {
+    private SamplerConfig buildSamplerConfig(ChatRequest request) {
+        SamplerConfig config = new SamplerConfig();
+        String profile = chatEngine.getModelProfile();
+        boolean thinking = Boolean.TRUE.equals(request.thinking);
+
+        if ("qwen3.5".equalsIgnoreCase(profile) && thinking) {
+            config.setTemperature(1.0f);
+            config.setTopP(0.95f);
+            config.setTopK(20);
+            config.setEnableThinking(true);
+        } else if (request.temperature != null) {
+            config.setTemperature(request.temperature);
+        }
+
+        return config;
+    }
+
+    private List<ChatMessage> augmentMessages(ChatRequest request) {
+        if (ragService == null || embeddingEngine == null || request == null) return request.messages;
+        try {
+            String query = extractLatestUserMessage(request.messages);
+            if (query.isBlank()) return request.messages;
+            float[] queryVector = embeddingEngine.embed(query);
+            return ragService.augmentMessages(request.messages, request.dynamic_rag, queryVector);
+        } catch (Exception e) {
+            System.err.println("[ChatController] RAG augmentation failed: " + e.getMessage());
+            return request.messages;
+        }
+    }
+
+    private String extractLatestUserMessage(List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) return "";
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ChatMessage message = messages.get(i);
+            if (message != null && "user".equalsIgnoreCase(message.role) && message.content != null) {
+                return message.content.trim();
+            }
+        }
+        return "";
+    }
+
+    private List<LlamaCppChatMessage> convertMessages(List<ChatMessage> chatMessages, Boolean thinking) {
         List<LlamaCppChatMessage> result = new ArrayList<>();
+        String modelProfile = chatEngine.getModelProfile();
+        boolean thinkingApplied = thinking == null;
         for (ChatMessage msg : chatMessages) {
-            result.add(new LlamaCppChatMessage(msg.role, msg.content));
+            if (msg == null || msg.role == null || msg.content == null) continue;
+            String content = msg.content;
+            if (!thinkingApplied && "user".equalsIgnoreCase(msg.role)) {
+                content = adaptThinkingForProfile(content, thinking, modelProfile);
+                thinkingApplied = true;
+            }
+            result.add(new LlamaCppChatMessage(msg.role, content));
         }
         return result;
+    }
+
+    private String adaptThinkingForProfile(String content, boolean thinking, String modelProfile) {
+        if ("qwen3".equalsIgnoreCase(modelProfile)) {
+            String prefix = thinking ? "/think" : "/no_think";
+            if (content.startsWith("/think") || content.startsWith("/no_think")) return content;
+            return prefix + "\n" + content;
+        }
+        return content;
+    }
+
+    private int normalizeMaxTokens(Integer maxTokens) {
+        if (maxTokens == null || maxTokens <= 0) return 0;
+        return maxTokens;
+    }
+
+    private static class ReasoningCleaner {
+        private static final String[][] TAG_PAIRS = {
+                {"<think>", "</think>"},
+                {"<reasoning>", "</reasoning>"},
+                {"<analysis>", "</analysis>"},
+                {"<thought>", "</thought>"},
+                {"[think]", "[/think]"},
+                {"[reasoning]", "[/reasoning]"},
+                {"[analysis]", "[/analysis]"},
+                {"[thought]", "[/thought]"}
+        };
+
+        private final StringBuilder pending = new StringBuilder();
+        private String activeCloseTag = null;
+
+        String feed(String token) {
+            if (token == null || token.isEmpty()) return "";
+            pending.append(token);
+            StringBuilder output = new StringBuilder();
+            while (pending.length() > 0) {
+                String lower = pending.toString().toLowerCase();
+                if (activeCloseTag != null) {
+                    int close = lower.indexOf(activeCloseTag);
+                    if (close < 0) {
+                        int keep = longestTagPrefix(pending);
+                        pending.delete(0, pending.length() - keep);
+                        break;
+                    }
+                    pending.delete(0, close + activeCloseTag.length());
+                    activeCloseTag = null;
+                    continue;
+                }
+
+                TagMatch next = findNextTag(lower);
+                if (next == null) {
+                    int keep = longestTagPrefix(pending);
+                    int emitLength = pending.length() - keep;
+                    if (emitLength > 0) {
+                        output.append(pending, 0, emitLength);
+                        pending.delete(0, emitLength);
+                    }
+                    break;
+                }
+
+                if (next.opening) {
+                    output.append(pending, 0, next.index);
+                    pending.delete(0, next.index + next.tag.length());
+                    activeCloseTag = next.closeTag;
+                } else {
+                    output.append(pending, 0, next.index);
+                    pending.delete(0, next.index + next.tag.length());
+                }
+            }
+            return output.toString();
+        }
+
+        static String clean(String text) {
+            if (text == null || text.isEmpty()) return "";
+            String result = text;
+            for (String[] pair : TAG_PAIRS) {
+                result = result.replaceAll("(?is)" + regexQuote(pair[0]) + ".*?" + regexQuote(pair[1]), "");
+                result = result.replaceAll("(?i)" + regexQuote(pair[0]), "");
+                result = result.replaceAll("(?i)" + regexQuote(pair[1]), "");
+            }
+            return result;
+        }
+
+        private static TagMatch findNextTag(String lower) {
+            TagMatch best = null;
+            for (String[] pair : TAG_PAIRS) {
+                int open = lower.indexOf(pair[0]);
+                if (open >= 0 && (best == null || open < best.index)) {
+                    best = new TagMatch(open, pair[0], pair[1], true);
+                }
+                int close = lower.indexOf(pair[1]);
+                if (close >= 0 && (best == null || close < best.index)) {
+                    best = new TagMatch(close, pair[1], null, false);
+                }
+            }
+            return best;
+        }
+
+        private static int longestTagPrefix(StringBuilder value) {
+            String lower = value.toString().toLowerCase();
+            int maxTagLength = 0;
+            for (String[] pair : TAG_PAIRS) {
+                maxTagLength = Math.max(maxTagLength, pair[0].length());
+                maxTagLength = Math.max(maxTagLength, pair[1].length());
+            }
+            int max = Math.min(lower.length(), maxTagLength - 1);
+            int best = 0;
+            for (int i = 1; i <= max; i++) {
+                String suffix = lower.substring(lower.length() - i);
+                for (String[] pair : TAG_PAIRS) {
+                    if (pair[0].startsWith(suffix) || pair[1].startsWith(suffix)) {
+                        best = i;
+                        break;
+                    }
+                }
+            }
+            return best;
+        }
+
+        private static String regexQuote(String value) {
+            return java.util.regex.Pattern.quote(value);
+        }
+
+        private static class TagMatch {
+            private final int index;
+            private final String tag;
+            private final String closeTag;
+            private final boolean opening;
+
+            private TagMatch(int index, String tag, String closeTag, boolean opening) {
+                this.index = index;
+                this.tag = tag;
+                this.closeTag = closeTag;
+                this.opening = opening;
+            }
+        }
+    }
+
+    public static class ErrorResponse {
+        public String error;
+
+        public ErrorResponse(String error) {
+            this.error = error == null ? "unknown error" : error;
+        }
     }
 
     public static class ChatRequest {
@@ -144,11 +387,21 @@ public class ChatController {
         public Float temperature;
         public Boolean stream;
         public Integer max_tokens;
+        public Boolean thinking;
+        public List<JsonElement> dynamic_rag;
     }
 
     public static class ChatMessage {
         public String role;
         public String content;
+
+        public ChatMessage() {
+        }
+
+        public ChatMessage(String role, String content) {
+            this.role = role;
+            this.content = content;
+        }
     }
 
     public static class StreamChunk {

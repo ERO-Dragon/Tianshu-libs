@@ -19,6 +19,7 @@ public class InferenceTask {
     private final TaskType taskType;
     private final List<LlamaCppChatMessage> messages;
     private final SamplerConfig samplerConfig;
+    private final int maxTokens;
     private final Consumer<String> streamCallback;
     private final CompletableFuture<String> syncFuture;
     private volatile boolean cancelled = false;
@@ -26,35 +27,41 @@ public class InferenceTask {
     public InferenceTask(TaskType taskType,
                          List<LlamaCppChatMessage> messages,
                          SamplerConfig samplerConfig,
+                         int maxTokens,
                          Consumer<String> streamCallback) {
         this.taskId = UUID.randomUUID().toString().substring(0, 8);
         this.taskType = taskType;
         this.messages = messages;
         this.samplerConfig = samplerConfig != null ? samplerConfig : new SamplerConfig();
+        this.maxTokens = maxTokens;
         this.streamCallback = streamCallback;
         this.syncFuture = new CompletableFuture<>();
     }
 
     public static InferenceTask streamChat(List<LlamaCppChatMessage> messages,
                                            SamplerConfig samplerConfig,
+                                           int maxTokens,
                                            Consumer<String> streamCallback) {
-        return new InferenceTask(TaskType.STREAM_CHAT, messages, samplerConfig, streamCallback);
+        return new InferenceTask(TaskType.STREAM_CHAT, messages, samplerConfig, maxTokens, streamCallback);
     }
 
     public static InferenceTask syncCompress(List<LlamaCppChatMessage> messages,
-                                             SamplerConfig samplerConfig) {
-        return new InferenceTask(TaskType.SYNC_COMPRESS, messages, samplerConfig, null);
+                                             SamplerConfig samplerConfig,
+                                             int maxTokens) {
+        return new InferenceTask(TaskType.SYNC_COMPRESS, messages, samplerConfig, maxTokens, null);
     }
 
     public static InferenceTask syncToolCall(List<LlamaCppChatMessage> messages,
-                                             SamplerConfig samplerConfig) {
-        return new InferenceTask(TaskType.SYNC_TOOL_CALL, messages, samplerConfig, null);
+                                             SamplerConfig samplerConfig,
+                                             int maxTokens) {
+        return new InferenceTask(TaskType.SYNC_TOOL_CALL, messages, samplerConfig, maxTokens, null);
     }
 
     public String getTaskId() { return taskId; }
     public TaskType getTaskType() { return taskType; }
     public List<LlamaCppChatMessage> getMessages() { return messages; }
     public SamplerConfig getSamplerConfig() { return samplerConfig; }
+    public int getMaxTokens() { return maxTokens; }
     public Consumer<String> getStreamCallback() { return streamCallback; }
     public CompletableFuture<String> getSyncFuture() { return syncFuture; }
     public boolean isCancelled() { return cancelled; }

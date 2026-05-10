@@ -73,15 +73,25 @@ public class TaskExecutor implements Runnable {
     }
 
     private LlamaCppSamplerChain buildSamplerChain(SamplerConfig config) {
-        if (config.getTemperature() > 0.0f) {
-            DefaultSamplerChainParams params = new DefaultSamplerChainParams(config.getTemperature());
-            return LlamaCppSamplers.newDefaultSampler(params);
-        }
-        return LlamaCppSamplers.newDefaultSampler(false);
-    }
-
-    private LlamaCppSamplerChain buildSamplerChainWithGrammar(SamplerConfig config) {
-        LlamaCppSamplerChain chain = buildSamplerChain(config);
+        DefaultSamplerChainParams params = new DefaultSamplerChainParams(
+                config.getTemperature(),
+                0,
+                0L,
+                config.getTopK(),
+                config.getTopP(),
+                config.getMinP(),
+                1.0F,
+                1.0F,
+                0.0F,
+                1.0F,
+                config.getPenaltyLastN(),
+                config.getPenaltyRepeat(),
+                config.getPenaltyFreq(),
+                config.getPenaltyPresent(),
+                false,
+                false
+        );
+        LlamaCppSamplerChain chain = LlamaCppSamplers.newDefaultSampler(params);
         if (config.hasGrammar()) {
             LlamaCppNativeSampler grammarSampler = LlamaCppSamplers.newSamplerGrammar(
                     engine.getModel(),
@@ -91,6 +101,10 @@ public class TaskExecutor implements Runnable {
             chain.addSampler(grammarSampler);
         }
         return chain;
+    }
+
+    private LlamaCppSamplerChain buildSamplerChainWithGrammar(SamplerConfig config) {
+        return buildSamplerChain(config);
     }
 
     private void doStreamChat(LlamaCppContext context, LlamaCppSamplerChain chain, InferenceTask task) throws IOException {
@@ -104,8 +118,11 @@ public class TaskExecutor implements Runnable {
         Consumer<String> callback = task.getStreamCallback();
 
         String token;
+        int generatedTokens = 0;
         while ((token = processor.nextToken()) != null) {
             if (task.isCancelled()) break;
+            if (task.getMaxTokens() > 0 && generatedTokens >= task.getMaxTokens()) break;
+            generatedTokens++;
             fullResponse.append(token);
             if (callback != null) {
                 callback.accept(token);
@@ -132,7 +149,19 @@ public class TaskExecutor implements Runnable {
         }
 
         StringWriter writer = new StringWriter();
-        processor.readMessage(writer);
+        int maxTokens = task.getMaxTokens();
+        if (maxTokens > 0) {
+            int generatedTokens = 0;
+            String token;
+            while ((token = processor.nextToken()) != null) {
+                if (task.isCancelled()) break;
+                if (generatedTokens >= maxTokens) break;
+                generatedTokens++;
+                writer.write(token);
+            }
+        } else {
+            processor.readMessage(writer);
+        }
         String result = writer.toString();
 
         task.getSyncFuture().complete(result);

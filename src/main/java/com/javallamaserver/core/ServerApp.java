@@ -1,139 +1,121 @@
 package com.javallamaserver.core;
 
-import com.javallamaserver.llm.InferenceTask;
-import com.javallamaserver.llm.LlamaEngine;
-import com.javallamaserver.web.ChatController;
-import com.javallamaserver.web.ChatController.ChatRequest;
-
-import io.javalin.Javalin;
-
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import com.javallamaserver.llm.EmbeddingEngine;
+import com.javallamaserver.llm.InferenceTask;
+import com.javallamaserver.llm.LlamaEngine;
+import com.javallamaserver.llm.ModelRegistry;
+import com.javallamaserver.rag.DynamicRagRetriever;
+import com.javallamaserver.rag.RagConfig;
+import com.javallamaserver.rag.RagService;
+import com.javallamaserver.rag.StaticRagIndex;
+import com.javallamaserver.web.ChatController;
+import com.javallamaserver.web.ChatController.ChatRequest;
+import io.javalin.Javalin;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.io.PipedInputStream;
-import java.io.PipedOutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ServerApp {
 
-    private static final String MODEL_PATH = "D:\\AIPROJECT\\LLMUnity\\models\\Qwen3-4B-Q4_K_M.gguf";
-    private static final int CONTEXT_SIZE = 4096;
-    private static final int THREAD_COUNT = Runtime.getRuntime().availableProcessors();
-    private static final int GPU_LAYERS = 999;
-    private static String MODEL_ALIAS = "unknown";
-    private static final String HOST = "127.0.0.1";
-    private static final int PORT = 8080;
-
     public static void main(String[] args) throws Exception {
-        String modelPath = MODEL_PATH;
-        int port = PORT;
-        String host = HOST;
-        int ctxSize = CONTEXT_SIZE;
-        int threads = THREAD_COUNT;
-        int gpuLayers = GPU_LAYERS;
-        String alias = MODEL_ALIAS;
-
-        for (int i = 0; i < args.length; i++) {
-            switch (args[i]) {
-                case "-m", "--model" -> modelPath = args[++i];
-                case "-c", "--context" -> ctxSize = Integer.parseInt(args[++i]);
-                case "-t", "--threads" -> threads = Integer.parseInt(args[++i]);
-                case "--host" -> host = args[++i];
-                case "--port" -> port = Integer.parseInt(args[++i]);
-                case "--alias" -> alias = args[++i];
-                case "-ngl", "--n-gpu-layers" -> gpuLayers = Integer.parseInt(args[++i]);
-                case "-h", "--help" -> {
-                    printUsage();
-                    return;
-                }
+        try {
+            ServerConfig config = ServerConfig.parse(args);
+            if (config.help) {
+                printUsage();
+                return;
             }
+            run(config);
+        } catch (ServerConfig.ConfigException e) {
+            System.err.println("[ServerApp] Configuration error:");
+            System.err.println(e.getMessage());
+            printUsage();
+            System.exit(2);
+        }
+    }
+
+    private static void run(ServerConfig config) throws Exception {
+        printStartupConfig(config);
+
+        String alias = config.alias;
+        if (alias == null || alias.isBlank() || alias.equals("unknown")) {
+            alias = extractFileName(config.modelPath);
         }
 
-        if (host.equals("0.0.0.0")) {
-            System.err.println("[ServerApp] SECURITY: Binding to 0.0.0.0 is forbidden. Use 127.0.0.1.");
-            System.exit(1);
+        LlamaEngine engine = LlamaEngine.loadChatEngine(
+                config.modelPath,
+                config.contextSize,
+                config.threads,
+                config.gpuLayers,
+                alias,
+                config.modelProfile,
+                config.maxQueueSize
+        );
+
+        EmbeddingEngine embeddingEngine = null;
+        if (config.embeddingModelPath != null && !config.embeddingModelPath.isBlank()) {
+            String embeddingAlias = config.embeddingAlias;
+            if (embeddingAlias == null || embeddingAlias.isBlank() || embeddingAlias.equals("embedding")) {
+                embeddingAlias = extractFileName(config.embeddingModelPath);
+            }
+            embeddingEngine = EmbeddingEngine.load(
+                    config.embeddingModelPath,
+                    config.embeddingContextSize,
+                    config.embeddingThreads,
+                    config.embeddingGpuLayers,
+                    embeddingAlias
+            );
         }
 
-        System.out.println("[ServerApp] Initializing LlamaEngine...");
-        System.out.println("[ServerApp]   Model: " + modelPath);
-        System.out.println("[ServerApp]   Context: " + ctxSize);
-        System.out.println("[ServerApp]   Threads: " + threads);
-        System.out.println("[ServerApp]   GPU Layers: " + gpuLayers);
-        System.out.println("[ServerApp]   Alias: " + alias);
-        // 自动从模型路径提取文件名作为别名，完美兼容 llama.cpp 行为
-        if (modelPath != null) {
-            int lastSlash = modelPath.lastIndexOf('\\');
-            if (lastSlash == -1) lastSlash = modelPath.lastIndexOf('/');
-            MODEL_ALIAS = lastSlash != -1 ? modelPath.substring(lastSlash + 1) : modelPath;
-        }
-        
-        LlamaEngine engine = LlamaEngine.initialize(modelPath, ctxSize, threads, gpuLayers, alias);
-        final LlamaEngine engineRef = engine;
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.err.println("[ServerApp] ShutdownHook: Releasing GPU resources...");
-                long start = System.currentTimeMillis();
-                try {
-                    engineRef.shutdown(); // 释放 GPU 显存、关闭推理线程池
-                } catch (Exception e) {
-                    System.err.println("[ServerApp] ShutdownHook error: " + e.getMessage());
-                }
-                long elapsed = System.currentTimeMillis() - start;
-                System.err.println("[ServerApp] ShutdownHook completed in " + elapsed + "ms");
-            }, "gpu-cleanup-hook"));
-        ChatController chatController = new ChatController();
+        ModelRegistry models = new ModelRegistry(engine, embeddingEngine);
+        RagService ragService = buildRagService(config, models);
+        ChatController chatController = new ChatController(models.getChatEngine(), embeddingEngine, ragService, config.requestTimeoutSeconds);
+        Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
-        Javalin app = Javalin.create(config -> {
-            config.showJavalinBanner = false;
-        }).start(host, port);
+        Javalin app = Javalin.create(javalinConfig -> javalinConfig.showJavalinBanner = false).start(config.host, config.port);
+        AtomicBoolean stopped = new AtomicBoolean(false);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdown(app, models, stopped), "server-shutdown-hook"));
 
         app.post("/v1/chat/completions", ctx -> {
-            String body = ctx.body();
-            boolean stream = body.contains("\"stream\"") && body.contains("true");
-
-            if (stream) {
-                ChatRequest request = chatController.parseRequestFromString(body);
-                if (request == null) {
-                    ctx.status(400).result("{\"error\": \"invalid request\"}");
+            ChatRequest request = chatController.parseRequestFromContext(ctx);
+            if (request == null) return;
+            if (Boolean.TRUE.equals(request.stream)) {
+                if (!chatController.hasQueueCapacity()) {
+                    ctx.status(429).contentType("application/json").result(gson.toJson(new ErrorResponse("inference queue is full")));
                     return;
                 }
-
-                // 1. 必须在挂起前设置好 Header
                 ctx.res().setContentType("text/event-stream");
                 ctx.res().setHeader("Cache-Control", "no-cache");
                 ctx.res().setHeader("Connection", "keep-alive");
                 ctx.res().setStatus(200);
-
-                // 2. 🌟 终极解法：ctx.future() 彻底挂起 Javalin 生命周期
                 ctx.future(() -> {
                     java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();
-                    // 用于在连接断开时取消任务
                     final InferenceTask[] currentTask = new InferenceTask[1];
                     try {
                         java.io.OutputStream out = ctx.res().getOutputStream();
-
                         java.util.function.Consumer<String> sender = data -> {
                             try {
                                 out.write(("data: " + data + "\n\n").getBytes("UTF-8"));
                                 out.flush();
                             } catch (Exception e) {
-                                // 连接断开，取消推理任务
                                 System.err.println("[ServerApp] SSE connection broken, cancelling task...");
-                                if (currentTask[0] != null) {
-                                    currentTask[0].cancel();
-                                }
+                                if (currentTask[0] != null) currentTask[0].cancel();
                                 future.completeExceptionally(e);
                             }
                         };
-
                         Runnable doneRunner = () -> {
                             try {
                                 out.write("data: [DONE]\n\n".getBytes("UTF-8"));
                                 out.flush();
-                            } catch (Exception ignored) {}
+                            } catch (Exception ignored) {
+                            }
                             future.complete(null);
                         };
-
                         currentTask[0] = chatController.handleStreamChatRaw(request, sender, doneRunner);
                     } catch (Exception e) {
                         future.completeExceptionally(e);
@@ -141,66 +123,201 @@ public class ServerApp {
                     return future;
                 });
             } else {
-                chatController.syncHandler().handle(ctx);
+                chatController.handleSyncChat(ctx, request);
             }
         });
 
         app.get("/health", ctx -> {
-            if (engine.isModelLoaded()) {
-                ctx.status(200).result("{\"status\": \"ready\"}");
-            } else {
-                ctx.status(503).result("{\"status\": \"loading\"}");
+            HealthResponse response = new HealthResponse(
+                    models.isReady() ? "ready" : "loading",
+                    models.hasEmbeddingEngine(),
+                    ragService == null ? 0 : ragService.getStaticChunkCount(),
+                    models.getChatEngine().getQueueSize(),
+                    models.getChatEngine().getMaxQueueSize()
+            );
+            ctx.status(models.isReady() ? 200 : 503).contentType("application/json").result(gson.toJson(response));
+        });
+
+        app.post("/v1/embeddings", ctx -> {
+            if (!models.hasEmbeddingEngine()) {
+                ctx.status(404).result(gson.toJson(new ErrorResponse("embedding model is not configured")));
+                return;
             }
+            EmbeddingRequest request = gson.fromJson(ctx.body(), EmbeddingRequest.class);
+            if (request == null || request.input == null || request.input.isEmpty()) {
+                ctx.status(400).result(gson.toJson(new ErrorResponse("input is required")));
+                return;
+            }
+            float[][] vectors = models.getEmbeddingEngine().embed(request.input);
+            EmbeddingResponse response = new EmbeddingResponse(models.getEmbeddingEngine().getModelAlias(), vectors);
+            ctx.contentType("application/json").result(gson.toJson(response));
         });
 
         app.get("/v1/models", ctx -> {
-            ctx.contentType("application/json");
-            ctx.result("{\"object\":\"list\",\"data\":[{\"id\":\"" + engine.getModelAlias()
-                    + "\",\"object\":\"model\",\"owned_by\":\"local\"}]}");
+            ModelsResponse response = new ModelsResponse();
+            response.data.add(new ModelInfo(models.getChatEngine().getModelAlias(), "model", "local", null));
+            if (models.hasEmbeddingEngine()) {
+                response.data.add(new ModelInfo(models.getEmbeddingEngine().getModelAlias(), "model", "local", "embedding"));
+            }
+            ctx.contentType("application/json").result(gson.toJson(response));
         });
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("[ServerApp] Shutdown hook triggered.");
-            app.stop();
-            engine.shutdown();
-        }));
-
-        System.out.println("[ServerApp] Server started at http://" + host + ":" + port);
+        System.out.println("[ServerApp] Server started at http://" + config.host + ":" + config.port);
         System.out.println("[ServerApp] Endpoints:");
         System.out.println("[ServerApp]   POST /v1/chat/completions  (stream=true/false)");
         System.out.println("[ServerApp]   GET  /health");
         System.out.println("[ServerApp]   GET  /v1/models");
+        System.out.println("[ServerApp]   POST /v1/embeddings");
 
-        // startConsoleChat(host, port);
-        
-        // ==========================================
-        // 【防孤儿守护】：检测父进程是否存活
-        // ==========================================
-        String parentPidStr = System.getenv("PARENT_PID");
-        if (parentPidStr != null) {
-            try {
-                long parentPid = Long.parseLong(parentPidStr);
-                Thread watchdog = new Thread(() -> {
-                    System.out.println("[ServerApp] Watchdog started. Monitoring parent PID: " + parentPid);
-                    while (true) {
-                        try {
-                            Thread.sleep(5000); // 每 5 秒检查一次
-                            // 询问操作系统：这个 PID 还在吗？
-                            if (!ProcessHandle.of(parentPid).isPresent()) {
-                                System.err.println("[ServerApp] Parent process (MC) is dead! Initiating suicide to release VRAM...");
-                                System.exit(0); // 这会 100% 触发下面的 gpu-cleanup-hook
-                            }
-                        } catch (InterruptedException e) {
-                            break;
-                        }
-                    }
-                }, "parent-watchdog");
-                watchdog.setDaemon(true); // 设为守护线程，不阻止 JVM 正常退出
-                watchdog.start();
-            } catch (NumberFormatException ignored) {}
-        } else {
-            System.out.println("[ServerApp] PARENT_PID not set. Running in standalone mode.");
+        startParentWatchdog();
+    }
+
+    private static RagService buildRagService(ServerConfig config, ModelRegistry models) throws Exception {
+        if (!models.hasEmbeddingEngine()) return null;
+        RagConfig ragConfig = new RagConfig(config.staticRagTopK, config.dynamicRagTopK, config.ragChunkSize, config.ragChunkOverlap);
+        DynamicRagRetriever dynamicRagRetriever = new DynamicRagRetriever(models.getEmbeddingEngine(), ragConfig);
+        StaticRagIndex staticRagIndex = new StaticRagIndex(models.getEmbeddingEngine(), ragConfig);
+        if (config.staticRagPath != null && !config.staticRagPath.isBlank()) {
+            staticRagIndex.load(config.staticRagPath);
         }
+        return new RagService(staticRagIndex, dynamicRagRetriever, ragConfig);
+    }
+
+    private static void shutdown(Javalin app, ModelRegistry models, AtomicBoolean stopped) {
+        if (!stopped.compareAndSet(false, true)) return;
+        System.err.println("[ServerApp] ShutdownHook: releasing resources...");
+        long start = System.currentTimeMillis();
+        try {
+            app.stop();
+        } catch (Exception e) {
+            System.err.println("[ServerApp] App shutdown error: " + e.getMessage());
+        }
+        try {
+            models.shutdown();
+        } catch (Exception e) {
+            System.err.println("[ServerApp] Model shutdown error: " + e.getMessage());
+        }
+        System.err.println("[ServerApp] Shutdown completed in " + (System.currentTimeMillis() - start) + "ms");
+    }
+
+    private static void printStartupConfig(ServerConfig config) {
+        System.out.println("[ServerApp] Initializing models...");
+        System.out.println("[ServerApp]   Chat Model: " + config.modelPath);
+        System.out.println("[ServerApp]   Chat Context: " + config.contextSize);
+        System.out.println("[ServerApp]   Chat Threads: " + config.threads);
+        System.out.println("[ServerApp]   Chat GPU Layers: " + config.gpuLayers);
+        System.out.println("[ServerApp]   Chat Alias: " + config.alias);
+        System.out.println("[ServerApp]   Chat Model Profile: " + (config.modelProfile == null ? "auto" : config.modelProfile));
+        System.out.println("[ServerApp]   Max Queue Size: " + config.maxQueueSize);
+        System.out.println("[ServerApp]   Request Timeout Seconds: " + config.requestTimeoutSeconds);
+        if (config.embeddingModelPath != null && !config.embeddingModelPath.isBlank()) {
+            System.out.println("[ServerApp]   Embedding Model: " + config.embeddingModelPath);
+            System.out.println("[ServerApp]   Embedding Context: " + config.embeddingContextSize);
+            System.out.println("[ServerApp]   Embedding Threads: " + config.embeddingThreads);
+            System.out.println("[ServerApp]   Embedding GPU Layers: " + config.embeddingGpuLayers);
+            System.out.println("[ServerApp]   Embedding Alias: " + config.embeddingAlias);
+        }
+        if (config.staticRagPath != null && !config.staticRagPath.isBlank()) {
+            System.out.println("[ServerApp]   Static RAG Path: " + config.staticRagPath);
+            System.out.println("[ServerApp]   Static RAG TopK: " + config.staticRagTopK);
+            System.out.println("[ServerApp]   Dynamic RAG TopK: " + config.dynamicRagTopK);
+            System.out.println("[ServerApp]   RAG Chunk Size: " + config.ragChunkSize);
+            System.out.println("[ServerApp]   RAG Chunk Overlap: " + config.ragChunkOverlap);
+        }
+    }
+
+    private static void startParentWatchdog() {
+        String parentPidStr = System.getenv("PARENT_PID");
+        if (parentPidStr == null) {
+            System.out.println("[ServerApp] PARENT_PID not set. Running in standalone mode.");
+            return;
+        }
+        try {
+            long parentPid = Long.parseLong(parentPidStr);
+            Thread watchdog = new Thread(() -> {
+                System.out.println("[ServerApp] Watchdog started. Monitoring parent PID: " + parentPid);
+                while (true) {
+                    try {
+                        Thread.sleep(5000);
+                        if (!ProcessHandle.of(parentPid).isPresent()) {
+                            System.err.println("[ServerApp] Parent process is dead. Exiting...");
+                            System.exit(0);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }, "parent-watchdog");
+            watchdog.setDaemon(true);
+            watchdog.start();
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    public static class EmbeddingRequest {
+        public List<String> input;
+    }
+
+    public static class EmbeddingResponse {
+        public String object = "list";
+        public String model;
+        public float[][] data;
+
+        public EmbeddingResponse(String model, float[][] data) {
+            this.model = model;
+            this.data = data;
+        }
+    }
+
+    public static class HealthResponse {
+        public String status;
+        public boolean embedding;
+        public int static_rag_chunks;
+        public int queue_size;
+        public int max_queue_size;
+
+        public HealthResponse(String status, boolean embedding, int staticRagChunks, int queueSize, int maxQueueSize) {
+            this.status = status;
+            this.embedding = embedding;
+            this.static_rag_chunks = staticRagChunks;
+            this.queue_size = queueSize;
+            this.max_queue_size = maxQueueSize;
+        }
+    }
+
+    public static class ModelsResponse {
+        public String object = "list";
+        public List<ModelInfo> data = new ArrayList<>();
+    }
+
+    public static class ModelInfo {
+        public String id;
+        public String object;
+        public String owned_by;
+        public String type;
+
+        public ModelInfo(String id, String object, String ownedBy, String type) {
+            this.id = id;
+            this.object = object;
+            this.owned_by = ownedBy;
+            this.type = type;
+        }
+    }
+
+    public static class ErrorResponse {
+        public String error;
+
+        public ErrorResponse(String error) {
+            this.error = error;
+        }
+    }
+
+    private static String extractFileName(String path) {
+        if (path == null || path.isBlank()) return "unknown";
+        int lastSlash = path.lastIndexOf('\\');
+        if (lastSlash == -1) lastSlash = path.lastIndexOf('/');
+        return lastSlash != -1 ? path.substring(lastSlash + 1) : path;
     }
 
     private static void startConsoleChat(String host, int port) {
@@ -306,12 +423,25 @@ public class ServerApp {
 
     private static void printUsage() {
         System.out.println("Usage: java -jar LlamaServer-Fat-all.jar [options]");
-        System.out.println("  -m,  --model <path>         GGUF model path (required)");
-        System.out.println("  -c,  --context <n>          Context size (default: 4096)");
-        System.out.println("  -t,  --threads <n>          Thread count (default: CPU cores)");
-        System.out.println("       --host <addr>          Bind host (default: 127.0.0.1)");
-        System.out.println("       --port <n>             Bind port (default: 8080)");
-        System.out.println("       --alias <name>         Model alias (default: qwen3-4b)");
-        System.out.println("  -ngl, --n-gpu-layers <n>    GPU layers (default: 999)");
+        System.out.println("  -m,  --model <path>                 GGUF chat model path (required)");
+        System.out.println("  -c,  --context <n>                  Context size (default: 4096)");
+        System.out.println("  -t,  --threads <n>                  Thread count (default: CPU cores)");
+        System.out.println("       --host <addr>                  Bind host (default: 127.0.0.1 only)");
+        System.out.println("       --port <n>                     Bind port (default: 8080)");
+        System.out.println("       --alias <name>                 Model alias (default: model file name)");
+        System.out.println("       --model-profile <name>         Override model adapter profile (default: auto)");
+        System.out.println("       --embedding-model <path>       GGUF embedding model path");
+        System.out.println("       --embedding-context <n>        Embedding context size (default: 4096)");
+        System.out.println("       --embedding-threads <n>        Embedding thread count (default: CPU cores)");
+        System.out.println("       --embedding-gpu-layers <n>     Embedding GPU layers (default: 999)");
+        System.out.println("       --embedding-alias <name>       Embedding model alias");
+        System.out.println("       --static-rag-path <path>       Static RAG file or directory path");
+        System.out.println("       --static-rag-top-k <n>         Static RAG top-k (default: 4)");
+        System.out.println("       --dynamic-rag-top-k <n>        Dynamic RAG top-k (default: 4)");
+        System.out.println("       --rag-chunk-size <n>           Static RAG chunk size (default: 900)");
+        System.out.println("       --rag-chunk-overlap <n>        Static RAG chunk overlap (default: 120)");
+        System.out.println("       --max-queue-size <n>           Inference queue capacity (default: 4)");
+        System.out.println("       --request-timeout-seconds <n>  Non-stream request timeout (default: 300)");
+        System.out.println("  -ngl, --n-gpu-layers <n>            Chat model GPU layers (default: 999)");
     }
 }

@@ -231,46 +231,88 @@ java -Djava.library.path=./libs/jjml-all ^
 
 ### 4.2 命令行参数表
 
-所有参数与官方 `llama-server.exe` 保持对齐：
+当前服务端采用显式配置方式启动，`--model` 为必填参数；如果启用静态 RAG，必须同时提供 embedding 模型。
 
 | 参数 | 短格式 | 类型 | 默认值 | 说明 |
 |------|--------|------|--------|------|
-| `--model` | `-m` | String | *(内置测试路径)* | **GGUF 模型文件路径（必填）** |
-| `--context` | `-c` | int | `4096` | 上下文窗口大小（tokens 数） |
-| `--threads` | `-t` | int | CPU 核心数 | 推理线程数 |
-| `--n-gpu-layers` | `-ngl` | int | `999` | 卸载到 GPU 的层数（999 = 全部卸载） |
-| `--host` | 无 | String | `127.0.0.1` | 绑定地址 |
+| `--model` | `-m` | String | 无 | **GGUF 聊天模型路径，必填** |
+| `--context` | `-c` | int | `4096` | 聊天模型上下文窗口大小 |
+| `--threads` | `-t` | int | CPU 核心数 | 聊天模型 CPU 推理线程数 |
+| `--n-gpu-layers` | `-ngl` | int | `999` | 聊天模型卸载到 GPU 的层数 |
+| `--host` | 无 | String | `127.0.0.1` | 绑定地址。当前仅允许 `127.0.0.1` |
 | `--port` | 无 | int | `8080` | 绑定端口 |
-| `--alias` | 无 | String | 模型文件名 | 模型别名（用于 API 返回的 model 字段） |
+| `--alias` | 无 | String | 模型文件名 | 聊天模型别名，用于 API 返回 |
+| `--model-profile` | 无 | String | 自动识别 | 模型适配 profile，例如 `qwen3` |
+| `--embedding-model` | 无 | String | 无 | GGUF embedding 模型路径 |
+| `--embedding-context` | 无 | int | `4096` | embedding 模型上下文窗口大小 |
+| `--embedding-threads` | 无 | int | CPU 核心数 | embedding 模型 CPU 线程数 |
+| `--embedding-gpu-layers` | 无 | int | `999` | embedding 模型 GPU 卸载层数 |
+| `--embedding-alias` | 无 | String | `embedding` | embedding 模型别名 |
+| `--static-rag-path` | 无 | String | 无 | 静态 RAG 文件或文件夹路径 |
+| `--static-rag-top-k` | 无 | int | `4` | 每次请求检索的静态 RAG 条数 |
+| `--dynamic-rag-top-k` | 无 | int | `4` | 每次请求检索的动态 RAG 条数 |
+| `--rag-chunk-size` | 无 | int | `900` | 静态 RAG 文本切块大小，按字符近似 |
+| `--rag-chunk-overlap` | 无 | int | `120` | 静态 RAG 切块重叠大小 |
+| `--max-queue-size` | 无 | int | `4` | 推理队列容量。队列满时返回 `429` |
+| `--request-timeout-seconds` | 无 | int | `300` | 非流式请求最大等待时间 |
 | `--help` | `-h` | 无 | 无 | 打印帮助信息 |
 
-**参数解析源码参考**（[ServerApp.java](src/main/java/com/javallamaserver/core/ServerApp.java)）：
+#### 普通聊天模型启动
 
-```java
-for (int i = 0; i < args.length; i++) {
-    switch (args[i]) {
-        case "-m", "--model"      -> modelPath = args[++i];
-        case "-c", "--context"    -> ctxSize = Integer.parseInt(args[++i]);
-        case "-t", "--threads"    -> threads = Integer.parseInt(args[++i]);
-        case "--host"             -> host = args[++i];
-        case "--port"             -> port = Integer.parseInt(args[++i]);
-        case "--alias"            -> alias = args[++i];
-        case "-ngl", "--n-gpu-layers" -> gpuLayers = Integer.parseInt(args[++i]);
-        case "-h", "--help"       -> { printUsage(); return; }
-    }
-}
+```bash
+java -Djava.library.path=./libs/jjml-all \
+     -jar JavaLlamaServer.jar \
+     --model /path/to/chat-model.gguf \
+     --port 8080
 ```
 
-### 4.3 安全限制
+#### 启用静态 RAG 和动态 RAG 检索
 
-出于安全考虑，**禁止绑定到 `0.0.0.0`**。如果尝试绑定到 `0.0.0.0`，服务端会拒绝启动：
-
-```java
-if (host.equals("0.0.0.0")) {
-    System.err.println("[ServerApp] SECURITY: Binding to 0.0.0.0 is forbidden. Use 127.0.0.1.");
-    System.exit(1);
-}
+```bash
+java -Djava.library.path=./libs/jjml-all \
+     -jar JavaLlamaServer.jar \
+     --model /path/to/chat-model.gguf \
+     --embedding-model /path/to/bge-large-zh-v1.5.gguf \
+     --static-rag-path /path/to/rag-folder \
+     --static-rag-top-k 4 \
+     --dynamic-rag-top-k 4
 ```
+
+`--static-rag-path` 可以是单个文件，也可以是文件夹。传入文件夹时，服务端会递归扫描其中的 `.txt`、`.md`、`.json`、`.jsonl` 文件，启动时统一切块、向量化并建立内存索引。后续每次问答只会向量化用户查询和动态 RAG 条目，不会反复向量化静态文件。
+
+#### Minecraft 模组侧推荐启动方式
+
+模组侧建议使用 `ProcessBuilder` 启动独立 JVM，并显式传入：
+
+```text
+-Djava.library.path=<宿主侧解压出来的 native 库目录>
+-jar <解压出来的 JavaLlamaServer.jar>
+--model <聊天模型绝对路径>
+--embedding-model <embedding 模型绝对路径>
+--static-rag-path <整合包或模组生成的知识库目录>
+--port <本地端口>
+--max-queue-size 2
+--request-timeout-seconds 120
+```
+
+对于 Minecraft 场景，`--max-queue-size` 不建议过大。通常 `1~4` 更适合，避免玩家或脚本短时间堆积大量推理任务。
+
+### 4.3 模型 Profile 自动检测
+
+服务端启动时会自动检测模型类型，当前支持：
+
+| Profile | 检测条件 | thinking 控制方式 |
+|---|---|---|
+| `qwen3.5` | 模型路径或元数据包含 `qwen3.5`、`qwen3-5`、`qwen35` | `thinking: true` 时自动设置采样参数 `temperature=1.0, top_p=0.95, top_k=20`；默认不思考 |
+| `qwen3` | 模型路径或元数据包含 `qwen3` | `thinking: true` 注入 `/think`，`false` 注入 `/no_think` |
+| `deepseek-r1` | 模型路径或元数据包含 `deepseek` 和 `r1` | 不需要特殊控制，模型自带思考 |
+| `generic` | 其他所有模型 | `thinking` 字段不生效 |
+
+也可以通过 `--model-profile qwen3.5` 强制指定，跳过自动检测。
+
+### 4.4 安全限制
+
+出于安全考虑，当前服务端只允许绑定到 `127.0.0.1`。如果传入其他 host，启动配置校验会拒绝启动。
 
 这是为了防止 AI 推理服务意外暴露到局域网/公网。
 
@@ -297,15 +339,16 @@ ProcessBuilder pb = new ProcessBuilder(
 
 ## 5. API 接口说明
 
-所有 API 端点 **100% 兼容 OpenAI 标准格式**，可以直接使用任何支持 OpenAI API 的客户端库（如 `openai-java`、Python `openai` 库等）进行调用。
+本服务端兼容 OpenAI Chat Completions 的核心请求/响应格式，适合直接被 Minecraft 模组侧通过 HTTP 调用。当前重点支持聊天补全、流式输出、模型列表、健康检查、embedding 和 RAG 场景。
 
 ### 5.1 端点总览
 
-| 方法 | 路径 | 说明 | 对应官方 llama-server |
-|------|------|------|----------------------|
-| `POST` | `/v1/chat/completions` | 聊天补全（支持流式/非流式） | ✅ 完全兼容 |
-| `GET` | `/v1/models` | 获取可用模型列表 | ✅ 完全兼容 |
-| `GET` | `/health` | 健康检查 | ✅ 完全兼容 |
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/v1/chat/completions` | 聊天补全，支持流式/非流式、thinking 控制、动态 RAG |
+| `POST` | `/v1/embeddings` | 文本向量化，需要启动时配置 embedding 模型 |
+| `GET` | `/v1/models` | 获取当前加载的聊天模型和 embedding 模型 |
+| `GET` | `/health` | 健康检查，包含队列和静态 RAG 状态 |
 
 ### 5.2 POST /v1/chat/completions
 
@@ -315,29 +358,46 @@ ProcessBuilder pb = new ProcessBuilder(
 |------|------|------|------|
 | `messages` | Array | ✅ | 消息列表，每条包含 `role` 和 `content` |
 | `stream` | Boolean | ❌ | 是否流式输出，默认 `false` |
-| `temperature` | Float | ❌ | 采样温度，默认 `0.0`（贪心解码） |
+| `temperature` | Float | ❌ | 采样温度 |
 | `max_tokens` | Integer | ❌ | 最大生成 token 数 |
+| `thinking` | Boolean | ❌ | 是否开启模型思考。对 Qwen3 会自动注入 `/think` 或 `/no_think`；对 Qwen3.5 会自动设置推荐的采样参数（`temperature=1.0`, `top_p=0.95`, `top_k=20`）；其他模型不生效 |
+| `dynamic_rag` | Array | ❌ | 动态 RAG 条目列表。模组侧只需要传字符串列表或包含 `text` 的对象列表 |
 
 **支持的 `role` 值：** `system`、`user`、`assistant`
 
-#### 非流式请求示例（stream=false）
-
-**请求：**
+#### 请求示例：带多 system、thinking 和动态 RAG
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json; charset=utf-8" \
   -d '{
     "messages": [
-      {"role": "system", "content": "你是一个有帮助的助手。"},
-      {"role": "user", "content": "用三句话介绍量子计算。"}
+      {"role": "system", "content": "你是 Minecraft 世界中的村民铁匠。"},
+      {"role": "system", "content": "当前时间是夜晚，玩家在村庄附近。"},
+      {"role": "user", "content": "我现在该做什么？"}
     ],
-    "stream": false,
-    "temperature": 0.7
+    "temperature": 0.6,
+    "stream": true,
+    "thinking": true,
+    "dynamic_rag": [
+      "玩家背包里有铁剑、铁镐和煤炭。",
+      "附近有僵尸，村庄有一名铁匠。"
+    ]
   }'
 ```
 
-**响应：**
+如果模组侧愿意传对象列表，也可以：
+
+```json
+"dynamic_rag": [
+  {"text": "玩家背包里有铁剑、铁镐和煤炭。"},
+  {"text": "附近有僵尸，村庄有一名铁匠。"}
+]
+```
+
+服务端会先对当前用户问题做向量检索，再把静态 RAG 与动态 RAG 共同整理进 system 上下文，然后送进聊天模型。
+
+#### 非流式响应示例
 
 ```json
 {
@@ -350,7 +410,7 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "量子计算是利用量子力学原理进行信息处理的计算方式。与经典计算机使用比特（0或1）不同，量子计算机使用量子比特（qubit），可以同时处于0和1的叠加态。这种特性使得量子计算机在某些特定问题上具有指数级的计算优势。"
+        "content": "你现在应该先进屋或靠近铁傀儡，夜晚附近有僵尸，不适合继续外出。你手里有铁剑，可以先清理最近的威胁，再回来找我修理装备。"
       },
       "finish_reason": "stop"
     }
@@ -401,6 +461,8 @@ data: [DONE]
 - 当生成结束时，发送 `finish_reason: "stop"` 的 chunk
 - 最后发送 `usage` chunk（包含 token 统计信息）
 - 最终以 `data: [DONE]\n\n` 标记流结束
+- 如果队列在进入 SSE 前已经满，服务端会直接返回 HTTP `429` 和普通 JSON 错误，不会打开 SSE 流
+- 如果连接已经建立后底层发生异常，客户端应按 SSE 数据帧中的错误 JSON 或连接结束进行容错处理
 
 ### 5.3 GET /v1/models
 
@@ -438,7 +500,13 @@ curl http://127.0.0.1:8080/health
 **模型已加载时的响应：**
 
 ```json
-{"status": "ready"}
+{
+  "status": "ready",
+  "embedding": true,
+  "static_rag_chunks": 128,
+  "queue_size": 0,
+  "max_queue_size": 4
+}
 ```
 
 HTTP 状态码：`200`
@@ -451,7 +519,34 @@ HTTP 状态码：`200`
 
 HTTP 状态码：`503`
 
-### 5.5 错误响应格式
+### 5.5 POST /v1/embeddings
+
+该接口用于把文本转换为向量。只有启动时传入 `--embedding-model` 后才可用。
+
+**请求：**
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/embeddings \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{
+    "input": ["铁剑可以保护玩家", "夜晚的村庄可能刷怪"]
+  }'
+```
+
+**响应：**
+
+```json
+{
+  "object": "list",
+  "model": "bge-large-zh-v1.5.gguf",
+  "data": [
+    [0.01, 0.02, -0.03],
+    [0.04, -0.01, 0.08]
+  ]
+}
+```
+
+### 5.6 错误响应格式
 
 所有错误均返回标准 JSON 格式：
 
@@ -464,6 +559,9 @@ HTTP 状态码：`503`
 | HTTP 状态码 | 触发条件 |
 |-------------|---------|
 | `400` | 请求 JSON 格式错误、`messages` 字段缺失 |
+| `404` | 请求 embedding 接口但未配置 embedding 模型 |
+| `429` | 推理队列已满 |
+| `504` | 非流式请求等待超时 |
 | `500` | 推理过程中发生内部错误 |
 
 ---
