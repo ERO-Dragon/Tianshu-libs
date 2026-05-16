@@ -13,7 +13,7 @@ public class RagChunk {
         this.id = id == null || id.isBlank() ? source : id;
         this.text = text.trim();
         this.source = source == null ? "unknown" : source;
-        this.vector = vector;
+        this.vector = VectorMath.normalizedCopy(vector);
     }
 
     public String getId() {

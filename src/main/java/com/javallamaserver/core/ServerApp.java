@@ -4,13 +4,20 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.javallamaserver.llm.EmbeddingEngine;
+import com.javallamaserver.llm.InferenceLane;
 import com.javallamaserver.llm.InferenceTask;
+import com.javallamaserver.llm.LaneConfig;
+import com.javallamaserver.llm.LaneMetrics;
 import com.javallamaserver.llm.LlamaEngine;
 import com.javallamaserver.llm.ModelRegistry;
 import com.javallamaserver.rag.DynamicRagRetriever;
+import com.javallamaserver.rag.MemoryRagIndex;
 import com.javallamaserver.rag.RagConfig;
+import com.javallamaserver.rag.RagProfileRegistry;
 import com.javallamaserver.rag.RagService;
+import com.javallamaserver.rag.RagSourceCache;
 import com.javallamaserver.rag.StaticRagIndex;
+import com.javallamaserver.rag.WorldStaticRagRegistry;
 import com.javallamaserver.web.ChatController;
 import com.javallamaserver.web.ChatController.ChatRequest;
 import io.javalin.Javalin;
@@ -47,14 +54,18 @@ public class ServerApp {
             alias = extractFileName(config.modelPath);
         }
 
+        LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.chatContext, config.chatThreads, config.chatMaxQueueSize);
+        LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.taskContext, config.taskThreads, config.taskMaxQueueSize);
         LlamaEngine engine = LlamaEngine.loadChatEngine(
                 config.modelPath,
-                config.contextSize,
-                config.threads,
+                chatLaneConfig,
+                taskLaneConfig,
                 config.gpuLayers,
                 alias,
                 config.modelProfile,
-                config.maxQueueSize
+                config.cacheTypeK,
+                config.cacheTypeV,
+                config.taskSuspendOnChat
         );
 
         EmbeddingEngine embeddingEngine = null;
@@ -85,8 +96,9 @@ public class ServerApp {
             ChatRequest request = chatController.parseRequestFromContext(ctx);
             if (request == null) return;
             if (Boolean.TRUE.equals(request.stream)) {
-                if (!chatController.hasQueueCapacity()) {
-                    ctx.status(429).contentType("application/json").result(gson.toJson(new ErrorResponse("inference queue is full")));
+                InferenceLane lane = request.resolveLane();
+                if (!chatController.hasQueueCapacity(lane)) {
+                    ctx.status(429).contentType("application/json").result(gson.toJson(new ErrorResponse(lane.wireName() + " inference queue is full")));
                     return;
                 }
                 ctx.res().setContentType("text/event-stream");
@@ -128,12 +140,13 @@ public class ServerApp {
         });
 
         app.get("/health", ctx -> {
+            LaneMetrics laneMetrics = models.getChatEngine().getLaneMetrics();
             HealthResponse response = new HealthResponse(
                     models.isReady() ? "ready" : "loading",
                     models.hasEmbeddingEngine(),
                     ragService == null ? 0 : ragService.getStaticChunkCount(),
-                    models.getChatEngine().getQueueSize(),
-                    models.getChatEngine().getMaxQueueSize()
+                    ragService == null ? 0 : ragService.getMemoryCount(),
+                    laneMetrics
             );
             ctx.status(models.isReady() ? 200 : 503).contentType("application/json").result(gson.toJson(response));
         });
@@ -176,11 +189,22 @@ public class ServerApp {
         if (!models.hasEmbeddingEngine()) return null;
         RagConfig ragConfig = new RagConfig(config.staticRagTopK, config.dynamicRagTopK, config.ragChunkSize, config.ragChunkOverlap);
         DynamicRagRetriever dynamicRagRetriever = new DynamicRagRetriever(models.getEmbeddingEngine(), ragConfig);
+        if (config.ragRootPath != null && !config.ragRootPath.isBlank()) {
+            RagProfileRegistry profileRegistry = new RagProfileRegistry(config.ragRootPath, config.ragProfileRefreshIntervalMillis);
+            RagSourceCache sourceCache = new RagSourceCache(models.getEmbeddingEngine(), ragConfig, config.memoryRagRefreshIntervalMillis);
+            WorldStaticRagRegistry worldStaticRegistry = new WorldStaticRagRegistry(config.worldStaticRagScanIntervalMillis);
+            return new RagService(dynamicRagRetriever, profileRegistry, sourceCache, worldStaticRegistry, ragConfig);
+        }
         StaticRagIndex staticRagIndex = new StaticRagIndex(models.getEmbeddingEngine(), ragConfig);
         if (config.staticRagPath != null && !config.staticRagPath.isBlank()) {
             staticRagIndex.load(config.staticRagPath);
         }
-        return new RagService(staticRagIndex, dynamicRagRetriever, ragConfig);
+        MemoryRagIndex memoryRagIndex = null;
+        if (config.memoryRagPath != null && !config.memoryRagPath.isBlank()) {
+            memoryRagIndex = new MemoryRagIndex(models.getEmbeddingEngine(), config.memoryRagPath, config.memoryRagRefreshIntervalMillis);
+            memoryRagIndex.load();
+        }
+        return new RagService(staticRagIndex, dynamicRagRetriever, memoryRagIndex, ragConfig);
     }
 
     private static void shutdown(Javalin app, ModelRegistry models, AtomicBoolean stopped) {
@@ -203,8 +227,15 @@ public class ServerApp {
     private static void printStartupConfig(ServerConfig config) {
         System.out.println("[ServerApp] Initializing models...");
         System.out.println("[ServerApp]   Chat Model: " + config.modelPath);
-        System.out.println("[ServerApp]   Chat Context: " + config.contextSize);
-        System.out.println("[ServerApp]   Chat Threads: " + config.threads);
+        System.out.println("[ServerApp]   Chat Context: " + config.chatContext);
+        System.out.println("[ServerApp]   Chat Threads: " + config.chatThreads);
+        System.out.println("[ServerApp]   Chat Max Queue Size: " + config.chatMaxQueueSize);
+        System.out.println("[ServerApp]   Task Context: " + config.taskContext);
+        System.out.println("[ServerApp]   Task Threads: " + config.taskThreads);
+        System.out.println("[ServerApp]   Task Max Queue Size: " + config.taskMaxQueueSize);
+        System.out.println("[ServerApp]   Task Suspend On Chat: " + config.taskSuspendOnChat);
+        System.out.println("[ServerApp]   KV Cache Type K: " + (config.cacheTypeK == null ? "default" : config.cacheTypeK.wireName()));
+        System.out.println("[ServerApp]   KV Cache Type V: " + (config.cacheTypeV == null ? "default" : config.cacheTypeV.wireName()));
         System.out.println("[ServerApp]   Chat GPU Layers: " + config.gpuLayers);
         System.out.println("[ServerApp]   Chat Alias: " + config.alias);
         System.out.println("[ServerApp]   Chat Model Profile: " + (config.modelProfile == null ? "auto" : config.modelProfile));
@@ -223,6 +254,15 @@ public class ServerApp {
             System.out.println("[ServerApp]   Dynamic RAG TopK: " + config.dynamicRagTopK);
             System.out.println("[ServerApp]   RAG Chunk Size: " + config.ragChunkSize);
             System.out.println("[ServerApp]   RAG Chunk Overlap: " + config.ragChunkOverlap);
+        }
+        if (config.memoryRagPath != null && !config.memoryRagPath.isBlank()) {
+            System.out.println("[ServerApp]   Memory RAG Path: " + config.memoryRagPath);
+            System.out.println("[ServerApp]   Memory RAG Refresh Interval Millis: " + config.memoryRagRefreshIntervalMillis);
+        }
+        if (config.ragRootPath != null && !config.ragRootPath.isBlank()) {
+            System.out.println("[ServerApp]   RAG Root Path: " + config.ragRootPath);
+            System.out.println("[ServerApp]   RAG Profile Refresh Interval Millis: " + config.ragProfileRefreshIntervalMillis);
+            System.out.println("[ServerApp]   World Static RAG Scan Interval Millis: " + config.worldStaticRagScanIntervalMillis);
         }
     }
 
@@ -274,15 +314,29 @@ public class ServerApp {
         public String status;
         public boolean embedding;
         public int static_rag_chunks;
+        public int memory_rag_memories;
         public int queue_size;
         public int max_queue_size;
+        public int chat_queue_size;
+        public int chat_max_queue_size;
+        public int task_queue_size;
+        public int task_max_queue_size;
+        public String current_lane;
+        public boolean task_suspended;
 
-        public HealthResponse(String status, boolean embedding, int staticRagChunks, int queueSize, int maxQueueSize) {
+        public HealthResponse(String status, boolean embedding, int staticRagChunks, int memoryRagMemories, LaneMetrics laneMetrics) {
             this.status = status;
             this.embedding = embedding;
             this.static_rag_chunks = staticRagChunks;
-            this.queue_size = queueSize;
-            this.max_queue_size = maxQueueSize;
+            this.memory_rag_memories = memoryRagMemories;
+            this.queue_size = laneMetrics.getChatQueueSize();
+            this.max_queue_size = laneMetrics.getChatMaxQueueSize();
+            this.chat_queue_size = laneMetrics.getChatQueueSize();
+            this.chat_max_queue_size = laneMetrics.getChatMaxQueueSize();
+            this.task_queue_size = laneMetrics.getTaskQueueSize();
+            this.task_max_queue_size = laneMetrics.getTaskMaxQueueSize();
+            this.current_lane = laneMetrics.getCurrentLane();
+            this.task_suspended = laneMetrics.isTaskSuspended();
         }
     }
 
@@ -436,11 +490,25 @@ public class ServerApp {
         System.out.println("       --embedding-gpu-layers <n>     Embedding GPU layers (default: 999)");
         System.out.println("       --embedding-alias <name>       Embedding model alias");
         System.out.println("       --static-rag-path <path>       Static RAG file or directory path");
+        System.out.println("       --memory-rag-path <path>       Memory RAG directory path");
+        System.out.println("       --rag-root-path <path>         Multi-world profile RAG root path");
+        System.out.println("       --rag-profile-refresh-interval-ms <n> Profile config refresh interval in milliseconds (default: 1000)");
+        System.out.println("       --world-static-rag-scan-interval-ms <n> World static RAG discovery interval in milliseconds (default: 5000)");
+        System.out.println("       --memory-rag-refresh-interval-ms <n> Memory RAG refresh interval in milliseconds (default: 1000)");
         System.out.println("       --static-rag-top-k <n>         Static RAG top-k (default: 4)");
         System.out.println("       --dynamic-rag-top-k <n>        Dynamic RAG top-k (default: 4)");
         System.out.println("       --rag-chunk-size <n>           Static RAG chunk size (default: 900)");
         System.out.println("       --rag-chunk-overlap <n>        Static RAG chunk overlap (default: 120)");
-        System.out.println("       --max-queue-size <n>           Inference queue capacity (default: 4)");
+        System.out.println("       --chat-context <n>             Chat lane context size (default: --context)");
+        System.out.println("       --chat-threads <n>             Chat lane thread count (default: --threads)");
+        System.out.println("       --chat-max-queue-size <n>      Chat lane queue capacity (default: --max-queue-size)");
+        System.out.println("       --task-context <n>             Task lane context size (default: --context)");
+        System.out.println("       --task-threads <n>             Task lane thread count (default: min(2, CPU cores))");
+        System.out.println("       --task-max-queue-size <n>      Task lane queue capacity (default: 1)");
+        System.out.println("       --task-suspend-on-chat <bool>  Suspend task lane when chat is pending (default: true)");
+        System.out.println("       --cache-type-k <type>          KV cache K type, supported: f16, q8_0");
+        System.out.println("       --cache-type-v <type>          KV cache V type, supported: f16, q8_0");
+        System.out.println("       --max-queue-size <n>           Legacy chat lane queue capacity (default: 4)");
         System.out.println("       --request-timeout-seconds <n>  Non-stream request timeout (default: 300)");
         System.out.println("  -ngl, --n-gpu-layers <n>            Chat model GPU layers (default: 999)");
     }

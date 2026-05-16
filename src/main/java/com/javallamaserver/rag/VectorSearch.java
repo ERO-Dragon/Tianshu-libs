@@ -1,7 +1,9 @@
 package com.javallamaserver.rag;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.PriorityQueue;
 
 public class VectorSearch {
 
@@ -9,27 +11,20 @@ public class VectorSearch {
         if (chunks == null || chunks.isEmpty() || queryVector == null || queryVector.length == 0 || topK <= 0) {
             return List.of();
         }
-        List<RagSearchResult> results = new ArrayList<>();
+        float[] normalizedQuery = VectorMath.normalizedCopy(queryVector);
+        PriorityQueue<RagSearchResult> topResults = new PriorityQueue<>(Comparator.comparingDouble(RagSearchResult::getScore));
         for (RagChunk chunk : chunks) {
             if (chunk == null || chunk.getVector() == null || chunk.getVector().length == 0) continue;
-            results.add(new RagSearchResult(chunk, cosine(queryVector, chunk.getVector())));
+            double score = VectorMath.dot(normalizedQuery, chunk.getVector());
+            if (topResults.size() < topK) {
+                topResults.offer(new RagSearchResult(chunk, score));
+            } else if (score > topResults.peek().getScore()) {
+                topResults.poll();
+                topResults.offer(new RagSearchResult(chunk, score));
+            }
         }
+        List<RagSearchResult> results = new ArrayList<>(topResults);
         results.sort((a, b) -> Double.compare(b.getScore(), a.getScore()));
-        if (results.size() <= topK) return results;
-        return new ArrayList<>(results.subList(0, topK));
-    }
-
-    private double cosine(float[] a, float[] b) {
-        int length = Math.min(a.length, b.length);
-        double dot = 0.0;
-        double normA = 0.0;
-        double normB = 0.0;
-        for (int i = 0; i < length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-        if (normA == 0.0 || normB == 0.0) return 0.0;
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+        return results;
     }
 }

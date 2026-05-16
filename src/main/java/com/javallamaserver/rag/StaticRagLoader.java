@@ -11,8 +11,12 @@ import java.util.stream.Stream;
 public class StaticRagLoader {
 
     public List<SourceDocument> load(String path) throws IOException {
+        return load(path, null);
+    }
+
+    public List<SourceDocument> load(String path, Path excludedRoot) throws IOException {
         if (path == null || path.isBlank()) return List.of();
-        Path root = Path.of(path);
+        Path root = Path.of(path).toAbsolutePath().normalize();
         if (!Files.exists(root)) {
             throw new IllegalArgumentException("Static RAG path not found: " + path);
         }
@@ -23,6 +27,7 @@ public class StaticRagLoader {
         try (Stream<Path> paths = Files.walk(root)) {
             paths.filter(Files::isRegularFile)
                     .filter(this::isSupportedTextFile)
+                    .filter(file -> !isUnderExcludedRoot(file, excludedRoot))
                     .forEach(file -> {
                         try {
                             documents.add(readDocument(file));
@@ -75,6 +80,13 @@ public class StaticRagLoader {
     private boolean isSupportedTextFile(Path file) {
         String name = file.getFileName().toString().toLowerCase();
         return name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".json") || name.endsWith(".jsonl");
+    }
+
+    private boolean isUnderExcludedRoot(Path file, Path excludedRoot) {
+        if (excludedRoot == null) return false;
+        Path normalizedFile = file.toAbsolutePath().normalize();
+        Path normalizedRoot = excludedRoot.toAbsolutePath().normalize();
+        return normalizedFile.startsWith(normalizedRoot);
     }
 
     private String normalize(String text) {

@@ -5,9 +5,12 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.annotations.SerializedName;
 import com.javallamaserver.llm.EmbeddingEngine;
+import com.javallamaserver.llm.InferenceLane;
 import com.javallamaserver.llm.InferenceTask;
 import com.javallamaserver.llm.LlamaEngine;
 import com.javallamaserver.llm.SamplerConfig;
+import com.javallamaserver.rag.RagQueryOptions;
+import com.javallamaserver.rag.RagSearchResult;
 import com.javallamaserver.rag.RagService;
 import io.javalin.http.Context;
 import io.javalin.http.Handler;
@@ -48,6 +51,10 @@ public class ChatController {
         return chatEngine.hasQueueCapacity();
     }
 
+    public boolean hasQueueCapacity(InferenceLane lane) {
+        return chatEngine.hasQueueCapacity(lane);
+    }
+
     public Handler syncHandler() {
         return ctx -> {
             ChatRequest request = parseRequestFromContext(ctx);
@@ -62,6 +69,13 @@ public class ChatController {
             if (request.messages == null || request.messages.isEmpty()) {
                 ctx.status(400);
                 ctx.result("{\"error\": \"messages is required\"}");
+                return null;
+            }
+            try {
+                request.resolveLane();
+            } catch (IllegalArgumentException e) {
+                ctx.status(400);
+                ctx.result(gson.toJson(new ErrorResponse(e.getMessage())));
                 return null;
             }
             return request;
@@ -91,12 +105,19 @@ public class ChatController {
         long created = System.currentTimeMillis() / 1000;
         String model = chatEngine.getModelAlias();
 
-        List<LlamaCppChatMessage> messages = convertMessages(augmentMessages(request), request.thinking);
+        InferenceLane lane = request.resolveLane();
+        AugmentedRequest augmentedRequest = augmentRequest(request);
+        List<LlamaCppChatMessage> messages = convertMessages(augmentedRequest.messages, request.thinking);
         SamplerConfig samplerConfig = buildSamplerConfig(request);
 
         int maxTokens = normalizeMaxTokens(request.max_tokens);
+        int taskPriority = normalizeTaskPriority(request.task_priority);
+        boolean taskPreemptible = Boolean.TRUE.equals(request.task_preemptible);
         ReasoningCleaner cleaner = new ReasoningCleaner();
-        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, maxTokens, token -> {
+        if (shouldIncludeRagHits(request, augmentedRequest.ragHits)) {
+            dataSender.accept(gson.toJson(new RagHitsChunk(completionId, created, model, toRagHitsPayload(augmentedRequest.ragHits))));
+        }
+        InferenceTask task = InferenceTask.stream(lane, messages, samplerConfig, maxTokens, taskPriority, taskPreemptible, token -> {
             String cleanedToken = cleaner.feed(token);
             if (cleanedToken.isEmpty()) return;
             String chunkJson = gson.toJson(new StreamChunk(
@@ -137,21 +158,25 @@ public class ChatController {
         long created = System.currentTimeMillis() / 1000;
         String model = chatEngine.getModelAlias();
 
-        List<LlamaCppChatMessage> messages = convertMessages(augmentMessages(request), request.thinking);
+        AugmentedRequest augmentedRequest = augmentRequest(request);
+        List<LlamaCppChatMessage> messages = convertMessages(augmentedRequest.messages, request.thinking);
         SamplerConfig samplerConfig = buildSamplerConfig(request);
 
         int maxTokens = normalizeMaxTokens(request.max_tokens);
-        if (!chatEngine.hasQueueCapacity()) {
+        int taskPriority = normalizeTaskPriority(request.task_priority);
+        boolean taskPreemptible = Boolean.TRUE.equals(request.task_preemptible);
+        InferenceLane lane = request.resolveLane();
+        if (!chatEngine.hasQueueCapacity(lane)) {
             ctx.status(429);
-            ctx.result(gson.toJson(new ErrorResponse("inference queue is full")));
+            ctx.result(gson.toJson(new ErrorResponse(lane.wireName() + " inference queue is full")));
             return;
         }
-        InferenceTask task = InferenceTask.streamChat(messages, samplerConfig, maxTokens, null);
+        InferenceTask task = InferenceTask.syncChat(lane, messages, samplerConfig, maxTokens, taskPriority, taskPreemptible);
         try {
             chatEngine.submitTask(task);
         } catch (RejectedExecutionException e) {
             ctx.status(429);
-            ctx.result(gson.toJson(new ErrorResponse("inference queue is full")));
+            ctx.result(gson.toJson(new ErrorResponse(e.getMessage())));
             return;
         }
 
@@ -164,7 +189,8 @@ public class ChatController {
                             new ChatResponse.ChatMessage("assistant", fullText),
                             "stop"
                     )),
-                    new UsageInfo(0, 0, 0)
+                    new UsageInfo(0, 0, 0),
+                    shouldIncludeRagHits(request, augmentedRequest.ragHits) ? toRagHitsPayload(augmentedRequest.ragHits) : null
             );
             ctx.contentType("application/json");
             ctx.result(gson.toJson(response));
@@ -198,17 +224,50 @@ public class ChatController {
         return config;
     }
 
-    private List<ChatMessage> augmentMessages(ChatRequest request) {
-        if (ragService == null || embeddingEngine == null || request == null) return request.messages;
+    private AugmentedRequest augmentRequest(ChatRequest request) {
+        if (request == null) return new AugmentedRequest(List.of(), RagService.RagHits.empty());
+        if (ragService == null || embeddingEngine == null) return new AugmentedRequest(request.messages, RagService.RagHits.empty());
         try {
             String query = extractLatestUserMessage(request.messages);
-            if (query.isBlank()) return request.messages;
+            if (query.isBlank()) return new AugmentedRequest(request.messages, RagService.RagHits.empty());
+            InferenceLane lane = request.resolveLane();
+            boolean useStaticAndDynamic = lane == InferenceLane.CHAT || Boolean.TRUE.equals(request.use_rag);
+            boolean useMemory = lane == InferenceLane.CHAT && !Boolean.FALSE.equals(request.use_memory_rag);
+            if (!useStaticAndDynamic && !useMemory) return new AugmentedRequest(request.messages, RagService.RagHits.empty());
             float[] queryVector = embeddingEngine.embed(query);
-            return ragService.augmentMessages(request.messages, request.dynamic_rag, queryVector);
+            RagService.AugmentationResult result = ragService.augmentMessages(
+                    request.messages,
+                    request.dynamic_rag,
+                    queryVector,
+                    useStaticAndDynamic,
+                    useMemory,
+                    request.memory_rag_token_budget == null ? 0 : request.memory_rag_token_budget,
+                    new RagQueryOptions(request.world, request.profile, request.static_scope, request.static_mods)
+            );
+            return new AugmentedRequest(result.messages(), result.ragHits());
         } catch (Exception e) {
             System.err.println("[ChatController] RAG augmentation failed: " + e.getMessage());
-            return request.messages;
+            return new AugmentedRequest(request.messages, RagService.RagHits.empty());
         }
+    }
+
+    private boolean shouldIncludeRagHits(ChatRequest request, RagService.RagHits ragHits) {
+        return request != null
+                && !Boolean.FALSE.equals(request.include_rag_hits)
+                && ragHits != null
+                && ragHits.memory() != null
+                && !ragHits.memory().isEmpty();
+    }
+
+    private RagHitsPayload toRagHitsPayload(RagService.RagHits ragHits) {
+        List<MemoryHit> memory = new ArrayList<>();
+        if (ragHits != null && ragHits.memory() != null) {
+            for (RagSearchResult result : ragHits.memory()) {
+                if (result == null || result.getChunk() == null) continue;
+                memory.add(new MemoryHit(result.getChunk().getId(), result.getScore(), result.getChunk().getText()));
+            }
+        }
+        return new RagHitsPayload(memory);
     }
 
     private String extractLatestUserMessage(List<ChatMessage> messages) {
@@ -250,6 +309,11 @@ public class ChatController {
     private int normalizeMaxTokens(Integer maxTokens) {
         if (maxTokens == null || maxTokens <= 0) return 0;
         return maxTokens;
+    }
+
+    private int normalizeTaskPriority(Integer taskPriority) {
+        if (taskPriority == null) return 0;
+        return Math.max(-1000, Math.min(1000, taskPriority));
     }
 
     private static class ReasoningCleaner {
@@ -389,6 +453,66 @@ public class ChatController {
         public Integer max_tokens;
         public Boolean thinking;
         public List<JsonElement> dynamic_rag;
+        public Boolean use_rag;
+        public Boolean use_memory_rag;
+        public Integer memory_rag_token_budget;
+        public Boolean include_rag_hits;
+        public String world;
+        public String profile;
+        public String static_scope;
+        public List<String> static_mods;
+        public Integer task_priority;
+        public Boolean task_preemptible;
+        public String lane;
+
+        public InferenceLane resolveLane() {
+            return InferenceLane.parse(lane);
+        }
+    }
+
+    private static class AugmentedRequest {
+        private final List<ChatMessage> messages;
+        private final RagService.RagHits ragHits;
+
+        private AugmentedRequest(List<ChatMessage> messages, RagService.RagHits ragHits) {
+            this.messages = messages;
+            this.ragHits = ragHits;
+        }
+    }
+
+    public static class RagHitsChunk {
+        public String id;
+        public String object = "chat.completion.chunk";
+        public long created;
+        public String model;
+        public RagHitsPayload rag_hits;
+
+        public RagHitsChunk(String id, long created, String model, RagHitsPayload ragHits) {
+            this.id = id;
+            this.created = created;
+            this.model = model;
+            this.rag_hits = ragHits;
+        }
+    }
+
+    public static class RagHitsPayload {
+        public List<MemoryHit> memory;
+
+        public RagHitsPayload(List<MemoryHit> memory) {
+            this.memory = memory;
+        }
+    }
+
+    public static class MemoryHit {
+        public String uid;
+        public double score;
+        public String long_term_memory;
+
+        public MemoryHit(String uid, double score, String longTermMemory) {
+            this.uid = uid;
+            this.score = score;
+            this.long_term_memory = longTermMemory;
+        }
     }
 
     public static class ChatMessage {
@@ -465,14 +589,21 @@ public class ChatController {
         public String model;
         public List<ChatChoice> choices;
         public UsageInfo usage;
+        public RagHitsPayload rag_hits;
 
         public ChatResponse(String id, long created, String model,
                            List<ChatChoice> choices, UsageInfo usage) {
+            this(id, created, model, choices, usage, null);
+        }
+
+        public ChatResponse(String id, long created, String model,
+                           List<ChatChoice> choices, UsageInfo usage, RagHitsPayload ragHits) {
             this.id = id;
             this.created = created;
             this.model = model;
             this.choices = choices;
             this.usage = usage;
+            this.rag_hits = ragHits;
         }
 
         public static class ChatChoice {

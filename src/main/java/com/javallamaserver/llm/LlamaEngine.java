@@ -4,6 +4,7 @@ import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppModel;
 import org.argeo.jjml.llm.LlamaCppNative;
 import org.argeo.jjml.llm.params.ContextParam;
+import org.argeo.jjml.llm.params.ContextParams;
 import org.argeo.jjml.llm.params.ModelParam;
 
 import java.nio.file.Files;
@@ -12,38 +13,59 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LlamaEngine {
 
     private final String engineName;
     private final LlamaCppModel model;
-    private final int contextSize;
-    private final int threadCount;
+    private final LaneConfig chatLaneConfig;
+    private final LaneConfig taskLaneConfig;
     private final int gpuLayers;
     private final String modelAlias;
     private final String modelProfile;
+    private final KvCacheType cacheTypeK;
+    private final KvCacheType cacheTypeV;
+    private final boolean taskSuspendOnChat;
 
-    private final LinkedBlockingQueue<InferenceTask> taskQueue;
+    private final LinkedBlockingQueue<InferenceTask> chatQueue;
+    private final PriorityBlockingQueue<PrioritizedInferenceTask> taskQueue;
+    private final AtomicInteger queuedTaskTasks = new AtomicInteger(0);
+    private final AtomicInteger pendingChatTasks = new AtomicInteger(0);
     private final ExecutorService inferenceExecutor;
-    private final int maxQueueSize;
     private volatile boolean running = true;
+    private volatile InferenceLane currentLane;
+    private volatile boolean taskSuspended;
 
     static {
         LlamaCppNative.ensureLibrariesLoaded();
     }
 
-    private LlamaEngine(String engineName, LlamaCppModel model, int contextSize, int threadCount, int gpuLayers, String modelAlias, String modelProfile, int maxQueueSize) {
+    private LlamaEngine(String engineName,
+                        LlamaCppModel model,
+                        LaneConfig chatLaneConfig,
+                        LaneConfig taskLaneConfig,
+                        int gpuLayers,
+                        String modelAlias,
+                        String modelProfile,
+                        KvCacheType cacheTypeK,
+                        KvCacheType cacheTypeV,
+                        boolean taskSuspendOnChat) {
         this.engineName = engineName;
         this.model = model;
-        this.contextSize = contextSize;
-        this.threadCount = threadCount;
+        this.chatLaneConfig = chatLaneConfig;
+        this.taskLaneConfig = taskLaneConfig;
         this.gpuLayers = gpuLayers;
         this.modelAlias = modelAlias;
         this.modelProfile = modelProfile;
-        this.maxQueueSize = Math.max(1, maxQueueSize);
-        this.taskQueue = new LinkedBlockingQueue<>(this.maxQueueSize);
+        this.cacheTypeK = cacheTypeK;
+        this.cacheTypeV = cacheTypeV;
+        this.taskSuspendOnChat = taskSuspendOnChat;
+        this.chatQueue = new LinkedBlockingQueue<>(chatLaneConfig.getMaxQueueSize());
+        this.taskQueue = new PriorityBlockingQueue<>();
         this.inferenceExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, engineName + "-inference-worker");
             t.setDaemon(false);
@@ -58,10 +80,24 @@ public class LlamaEngine {
 
     public static LlamaEngine loadChatEngine(String modelPath, int contextSize, int threadCount,
                                              int gpuLayers, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
+        LaneConfig chatLane = new LaneConfig(InferenceLane.CHAT, contextSize, threadCount, maxQueueSize);
+        LaneConfig taskLane = new LaneConfig(InferenceLane.TASK, contextSize, Math.max(1, threadCount), 1);
+        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, modelAlias, modelProfile, null, null, true);
+    }
+
+    public static LlamaEngine loadChatEngine(String modelPath,
+                                             LaneConfig chatLaneConfig,
+                                             LaneConfig taskLaneConfig,
+                                             int gpuLayers,
+                                             String modelAlias,
+                                             String modelProfile,
+                                             KvCacheType cacheTypeK,
+                                             KvCacheType cacheTypeV,
+                                             boolean taskSuspendOnChat) throws Exception {
         LlamaCppModel model = loadModel("chat", modelPath, gpuLayers);
         String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
         System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
-        LlamaEngine engine = new LlamaEngine("chat", model, contextSize, threadCount, gpuLayers, modelAlias, resolvedModelProfile, maxQueueSize);
+        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat);
         engine.startWorker();
         return engine;
     }
@@ -83,7 +119,7 @@ public class LlamaEngine {
     }
 
     private void startWorker() {
-        inferenceExecutor.submit(new TaskExecutor(this, taskQueue));
+        inferenceExecutor.submit(new TaskExecutor(this, chatQueue));
         System.out.println("[LlamaEngine:" + engineName + "] Inference worker started.");
     }
 
@@ -112,15 +148,70 @@ public class LlamaEngine {
 
     public void submitTask(InferenceTask task) {
         if (!running) throw new IllegalStateException("Engine is shutting down");
-        if (!taskQueue.offer(task)) {
-            throw new RejectedExecutionException("Inference queue is full");
+        if (task == null) throw new IllegalArgumentException("task is required");
+        if (task.getLane() == InferenceLane.CHAT) {
+            pendingChatTasks.incrementAndGet();
+            boolean accepted = chatQueue.offer(task);
+            if (!accepted) {
+                pendingChatTasks.decrementAndGet();
+                throw new RejectedExecutionException("chat inference queue is full");
+            }
+            return;
+        }
+        if (queuedTaskTasks.get() >= taskLaneConfig.getMaxQueueSize()) {
+            throw new RejectedExecutionException("task inference queue is full");
+        }
+        queuedTaskTasks.incrementAndGet();
+        boolean accepted = taskQueue.offer(new PrioritizedInferenceTask(task));
+        if (!accepted) {
+            queuedTaskTasks.decrementAndGet();
+            throw new RejectedExecutionException("task inference queue is full");
         }
     }
 
-    LlamaCppContext createContext() {
-        var ctxParams = LlamaCppContext.defaultContextParams()
-                .with(ContextParam.n_ctx, contextSize)
-                .with(ContextParam.n_threads, threadCount);
+    InferenceTask pollChatTask(long timeout, TimeUnit unit) throws InterruptedException {
+        InferenceTask task = chatQueue.poll(timeout, unit);
+        if (task != null) pendingChatTasks.decrementAndGet();
+        return task;
+    }
+
+    InferenceTask pollTaskTask() {
+        PrioritizedInferenceTask prioritizedTask = taskQueue.poll();
+        if (prioritizedTask == null) return null;
+        queuedTaskTasks.decrementAndGet();
+        return prioritizedTask.getTask();
+    }
+
+    public int peekTaskPriority() {
+        PrioritizedInferenceTask task = taskQueue.peek();
+        return task == null ? Integer.MIN_VALUE : task.getTask().getTaskPriority();
+    }
+
+    boolean shouldSuspendTaskLane(InferenceTask currentTask) {
+        if (taskSuspendOnChat && pendingChatTasks.get() > 0) return true;
+        if (currentTask == null || !currentTask.isTaskPreemptible()) return false;
+        return peekTaskPriority() > currentTask.getTaskPriority();
+    }
+
+    boolean shouldSuspendTaskLane() {
+        return taskSuspendOnChat && pendingChatTasks.get() > 0;
+    }
+
+    void setCurrentLane(InferenceLane lane) {
+        currentLane = lane;
+    }
+
+    void setTaskSuspended(boolean taskSuspended) {
+        this.taskSuspended = taskSuspended;
+    }
+
+    LlamaCppContext createContext(InferenceLane lane) {
+        LaneConfig config = lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig;
+        ContextParams ctxParams = LlamaCppContext.defaultContextParams()
+                .with(ContextParam.n_ctx, config.getContextSize())
+                .with(ContextParam.n_threads, config.getThreadCount());
+        if (cacheTypeK != null) ctxParams = ctxParams.with(ContextParam.type_k, cacheTypeK.getGgmlType());
+        if (cacheTypeV != null) ctxParams = ctxParams.with(ContextParam.type_v, cacheTypeV.getGgmlType());
         return new LlamaCppContext(model, ctxParams);
     }
 
@@ -128,9 +219,14 @@ public class LlamaEngine {
     public String getEngineName() { return engineName; }
     public String getModelAlias() { return modelAlias; }
     public String getModelProfile() { return modelProfile; }
-    public int getContextSize() { return contextSize; }
-    public int getThreadCount() { return threadCount; }
+    public int getContextSize() { return chatLaneConfig.getContextSize(); }
+    public int getThreadCount() { return chatLaneConfig.getThreadCount(); }
     public int getGpuLayers() { return gpuLayers; }
+    public LaneConfig getChatLaneConfig() { return chatLaneConfig; }
+    public LaneConfig getTaskLaneConfig() { return taskLaneConfig; }
+    public KvCacheType getCacheTypeK() { return cacheTypeK; }
+    public KvCacheType getCacheTypeV() { return cacheTypeV; }
+    public boolean isTaskSuspendOnChat() { return taskSuspendOnChat; }
     public boolean isRunning() { return running; }
 
     public void shutdown() {
@@ -150,9 +246,18 @@ public class LlamaEngine {
         System.out.println("[LlamaEngine:" + engineName + "] Shutdown complete.");
     }
 
-    public int getQueueSize() { return taskQueue.size(); }
-    public int getMaxQueueSize() { return maxQueueSize; }
-    public boolean hasQueueCapacity() { return taskQueue.remainingCapacity() > 0; }
+    public int getQueueSize() { return getChatQueueSize(); }
+    public int getMaxQueueSize() { return chatLaneConfig.getMaxQueueSize(); }
+    public boolean hasQueueCapacity() { return hasQueueCapacity(InferenceLane.CHAT); }
+    public int getChatQueueSize() { return chatQueue.size(); }
+    public int getTaskQueueSize() { return queuedTaskTasks.get(); }
+    public boolean hasQueueCapacity(InferenceLane lane) {
+        return lane == InferenceLane.TASK ? queuedTaskTasks.get() < taskLaneConfig.getMaxQueueSize() : chatQueue.remainingCapacity() > 0;
+    }
+
+    public LaneMetrics getLaneMetrics() {
+        return new LaneMetrics(chatQueue.size(), chatLaneConfig.getMaxQueueSize(), queuedTaskTasks.get(), taskLaneConfig.getMaxQueueSize(), currentLane, taskSuspended);
+    }
 
     public boolean isModelLoaded() { return model != null; }
 
