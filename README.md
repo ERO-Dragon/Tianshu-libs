@@ -1,38 +1,171 @@
-### 3 分钟了解如何进入开发
+# Java Llama Server
 
-欢迎使用云效代码管理 Codeup，通过阅读以下内容，你可以快速熟悉 Codeup ，并立即开始今天的工作。
+Java Llama Server 是一个基于 Java 17 的本地大语言模型 HTTP 服务端，底层通过 jjml 调用 llama.cpp / ggml native runtime，HTTP 层使用 Javalin，JSON 处理使用 Gson。
 
-### 提交**文件**
+项目目标是把本地 LLM 推理服务独立成一个 Java 进程，便于 Minecraft Java 模组或其他 Java 应用通过 HTTP/SSE 调用，避免把 native 推理库直接加载进主应用进程。
 
-Codeup 支持两种方式进行代码提交：网页端提交，以及本地 Git 客户端提交。
+## 功能特性
 
-* 如需体验本地命令行操作，请先安装 Git 工具，安装方法参见[安装Git](https://help.aliyun.com/document_detail/153800.html)。
+- 提供兼容 OpenAI Chat Completions 风格的 HTTP 接口
+- 支持流式输出
+- 支持 chat / task 双 lane 推理架构
+- 支持长期记忆 RAG 和静态知识 RAG
+- 支持按 world/profile 组织多世界、多角色 RAG 数据
+- 使用 Shadow 打包为可运行 fat jar
+- native 推理库与主应用进程隔离，降低 JNI 崩溃对宿主应用的影响
 
-* 如需体验 SSH 方式克隆和提交代码，请先在平台账号内配置 SSH 公钥，配置方法参见[配置 SSH 密钥](https://help.aliyun.com/document_detail/153709.html)。
+## 技术栈
 
-* 如需体验 HTTP 方式克隆和提交代码，请先在平台账号内配置克隆账密，配置方法参见[配置 HTTPS 克隆账号密码](https://help.aliyun.com/document_detail/153710.html)。
+| 模块 | 技术 |
+| --- | --- |
+| 语言 | Java 17 |
+| HTTP 服务 | Javalin 5.6.3 |
+| JSON | Gson 2.10.1 |
+| 日志 | SLF4J 2.x + slf4j-simple |
+| 构建 | Gradle Kotlin DSL |
+| 打包 | Shadow Jar |
+| LLM JNI 绑定 | jjml / argeo-jjml |
+| Native runtime | llama.cpp / ggml / whisper 相关动态库 |
 
-现在，你可以在 Codeup 中提交代码文件了，跟着文档「[__提交第一行代码__](https://help.aliyun.com/document_detail/153707.html?spm=a2c4g.153710.0.0.3c213774PFSMIV#6a5dbb1063ai5)」一起操作试试看吧。
+## 第三方依赖说明
 
-<img src="https://img.alicdn.com/imgextra/i3/O1CN013zHrNR1oXgGu8ccvY_!!6000000005235-0-tps-2866-1268.jpg" width="100%" />
+本仓库不包含以下内容：
 
+- argeo-jjml 源码副本
+- 本地编译的 jjml jar
+- llama.cpp / ggml / whisper native 动态库
+- `.gguf` 等模型文件
+- RAG 运行数据和向量索引缓存
 
-### 进行代码检测
+这些内容需要使用者自行准备。
 
-开发过程中，为了更好的维护你的代码质量，你可以开启 Codeup 内置开箱即用的「[代码检测服务](https://help.aliyun.com/document_detail/434321.html)」，开启后提交或合并请求的变更将自动触发检测，识别代码编写规范和安全漏洞问题，并及时提供结果报表和修复建议。
+这样处理的原因是：
 
-<img src="https://img.alicdn.com/imgextra/i2/O1CN01BRzI1I1IO0CR2i4Aw_!!6000000000882-0-tps-2862-1362.jpg" width="100%" />
+- argeo-jjml 是独立开源项目，本项目只作为使用方依赖它
+- native 动态库是平台相关二进制产物，不适合直接放入源码仓库
+- 模型文件通常体积很大，并且有各自的 license
+- RAG 数据和记忆文件通常属于本地运行数据，不应进入公共仓库
 
-### 开展代码评审
+## 本地依赖目录
 
-功能开发完毕后，通常你需要发起「[代码评审并执行合并](https://help.aliyun.com/document_detail/153872.html)」，Codeup 支持多人协作的代码评审服务，你可以通过「[保护分支设置合并规则](https://help.aliyun.com/document_detail/153873.html?spm=a2c4g.203108.0.0.430765d1l9tTRR#p-4on-aep-l5q)」策略及「[__合并请求设置__](https://help.aliyun.com/document_detail/153874.html?spm=a2c4g.153871.0.0.3d38686cJpcdJI)」对合并过程进行流程化管控，同时提供在线代码评审及冲突解决能力，让评审过程更加流畅。
+当前 Gradle 配置期望本地存在 jjml jar：
 
-<img src="https://img.alicdn.com/imgextra/i1/O1CN01MaBDFH1WWcGnQqMHy_!!6000000002796-0-tps-2592-1336.jpg" width="100%" />
+```text
+libs/
+└── org.argeo.jjml-2.1.2.0006-7f18908.jar
+```
 
-### 成员协作
+运行时还需要准备 native 动态库目录，例如 Windows 下：
 
-是时候邀请成员一起编写卓越的代码工程了，请点击左下角「成员」邀请你的小伙伴开始协作吧！
+```text
+libs/
+└── jjml-all/
+    ├── llama.dll
+    ├── ggml.dll
+    ├── ggml-base.dll
+    ├── ggml-cpu-x64.dll
+    ├── Java_org_argeo_jjml_llm.dll
+    ├── Java_org_argeo_jjml_ggml.dll
+    ├── Java_org_argeo_jjml_mtmd.dll
+    ├── Java_org_argeo_jjml_whisper.dll
+    └── whisper.dll
+```
 
-### 更多
+Linux/macOS 下请放置对应平台的 `.so` 或 `.dylib` 文件，并在启动时通过 `java.library.path` 指向 native 库目录。
 
-Git 使用教学、高级功能指引等更多说明，参见[Codeup帮助文档](https://help.aliyun.com/document_detail/153402.html)。
+## 构建
+
+确保本地已经安装 JDK 17，并且已经把自行构建或获取的 jjml jar 放到 `libs/` 目录。
+
+Windows：
+
+```powershell
+.\gradlew.bat build
+```
+
+Linux/macOS：
+
+```bash
+./gradlew build
+```
+
+构建完成后，可运行 jar 位于：
+
+```text
+build/libs/JavaLlamaServer-v1.0.1-all.jar
+```
+
+## 运行
+
+基础启动示例：
+
+```powershell
+java -Djava.library.path=./libs/jjml-all -jar build/libs/JavaLlamaServer-v1.0.1-all.jar --model D:/models/model.gguf
+```
+
+Linux/macOS 示例：
+
+```bash
+java -Djava.library.path=./libs/jjml-all -jar build/libs/JavaLlamaServer-v1.0.1-all.jar --model /path/to/model.gguf
+```
+
+`--model` 指向本地模型文件路径。模型文件不由本项目下载或管理。
+
+更多启动参数、RAG 目录结构和接口示例请参考 [USAGE.md](USAGE.md)。
+
+## RAG 运行数据
+
+项目支持按世界和 profile 组织 RAG 数据。典型目录结构如下：
+
+```text
+llm_rag/
+├── world_a/
+│   ├── profiles.json
+│   ├── mod_a/
+│   │   ├── static_rag/
+│   │   └── agents/
+│   │       └── agent_001/
+│   │           └── memory_rag/
+│   │               └── memories.jsonl
+│   └── mod_b/
+│       ├── static_rag/
+│       └── agents/
+│           └── guard_bob/
+│               └── memory_rag/
+│                   └── memories.jsonl
+```
+
+这些文件属于运行数据，默认不建议提交到 Git 仓库。
+
+运行过程中生成的索引缓存包括：
+
+```text
+.javallama-rag-index/
+.javallama-memory-index/
+```
+
+这些目录也属于本地缓存，不应提交。
+
+## 开源仓库边界
+
+本仓库只维护 Java Llama Server 自身源码和构建配置。
+
+不随仓库分发的内容包括：
+
+```text
+argeo-jjml/
+libs/*.jar
+libs/jjml-all/
+*.gguf
+llm_rag/
+.javallama-rag-index/
+.javallama-memory-index/
+```
+
+如果你需要发布开箱即用版本，建议将完整运行包、jjml jar、native 动态库放到 GitHub Release，而不是直接提交到源码仓库。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。
+
+本项目依赖的第三方项目有各自的 license。分发源码、fat jar 或其他二进制包时，请同时遵守 argeo-jjml、llama.cpp、ggml、whisper、Javalin、Gson、SLF4J 等项目的许可要求。
