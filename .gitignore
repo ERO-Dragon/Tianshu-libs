@@ -1,16 +1,5 @@
-# Compiled class file
+# Compiled Java artifacts
 *.class
-
-# Log file
-*.log
-
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
@@ -19,44 +8,40 @@
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-# ============================
-# Java 编译输出文件
-# ============================
-*.class
-*.jar
-*.war
-*.ear
-*.zip
-*.tar.gz
-*.rar
-
-# 编译输出目录
+# Build output
 target/
 build/
 bin/
 out/
 gen/
 
-# IDEA
+# Gradle
+.gradle/
+.gradle-user-home/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDEs and editors
 .idea/
 *.iws
 *.iml
 *.ipr
-.gradle-user-home/
-
-# Eclipse
 .classpath
 .project
 .settings/
 .cxx/
 .externalToolBuilders/
-
-# VS Code
 .vscode/
 *.code-workspace
+*.ctxt
+.mtj.tmp/
+*.tmp
+*.bak
+*.swp
+*.cache
 
+# Maven release leftovers
 .mvn/
 mvnw
 mvnw.cmd
@@ -67,21 +52,23 @@ pom.xml.next
 release.properties
 dependency-reduced-pom.xml
 
-.gradle/
-gradle-app.setting
-!gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.jar
-
+# Logs and JVM crash files
 *.log
-*.tmp
-*.bak
-*.swp
-*.cache
-
+hs_err_pid*
+replay_pid*.log
 logs/
 log/
-temp/
 
+# Local configuration and secrets
+application-dev.yml
+application-dev.properties
+application-local.yml
+application-local.properties
+*.local
+.env
+.env.*
+
+# OS files
 .DS_Store
 .DS_Store?
 ._*
@@ -90,10 +77,38 @@ temp/
 ehthumbs.db
 Thumbs.db
 
-application-dev.yml
-application-dev.properties
-application-local.yml
-application-local.properties
-*.local
-.env
-.env.*
+# Temporary directories
+temp/
+tmp/
+
+# Local extracted or generated package directories
+/io/
+/org/
+
+# Third-party vendored jjml sources and local builds
+/argeo-jjml/
+/libs/*.jar
+/libs/**/*.jar
+/libs/jjml-all/
+/libs/**/*.dll
+/libs/**/*.so
+/libs/**/*.dylib
+/libs/**/*.exe
+
+# Local LLM model files
+*.gguf
+*.ggml
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.bin
+
+# JavaLlama RAG runtime data and indexes
+.javallama-rag-index/
+.javallama-memory-index/
+**/.javallama-rag-index/
+**/.javallama-memory-index/
+memories.jsonl
+**/memories.jsonl
+llm_rag/

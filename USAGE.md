@@ -231,13 +231,22 @@ java -Djava.library.path=./libs/jjml-all ^
 
 ### 4.2 命令行参数表
 
-当前服务端采用显式配置方式启动，`--model` 为必填参数；如果启用静态 RAG，必须同时提供 embedding 模型。
+当前服务端采用显式配置方式启动，`--model` 为必填参数；如果启用静态 RAG 或长期记忆 RAG，必须同时提供 embedding 模型。
 
 | 参数 | 短格式 | 类型 | 默认值 | 说明 |
 |------|--------|------|--------|------|
 | `--model` | `-m` | String | 无 | **GGUF 聊天模型路径，必填** |
-| `--context` | `-c` | int | `4096` | 聊天模型上下文窗口大小 |
-| `--threads` | `-t` | int | CPU 核心数 | 聊天模型 CPU 推理线程数 |
+| `--context` | `-c` | int | `4096` | 兼容旧参数，作为 `--chat-context` 的默认值；如果未显式设置 `--task-context`，也作为 task lane 默认上下文大小 |
+| `--threads` | `-t` | int | CPU 核心数 | 兼容旧参数，作为 `--chat-threads` 的默认值 |
+| `--chat-context` | 无 | int | `--context` | chat lane 上下文窗口大小，面向玩家实时对话 |
+| `--chat-threads` | 无 | int | `--threads` | chat lane CPU 推理线程数 |
+| `--chat-max-queue-size` | 无 | int | `--max-queue-size` | chat lane 队列容量。队列满时返回 `429` |
+| `--task-context` | 无 | int | `--context` | task lane 上下文窗口大小，面向压缩、摘要、后台任务 |
+| `--task-threads` | 无 | int | `min(2, CPU核心数)` | task lane CPU 推理线程数 |
+| `--task-max-queue-size` | 无 | int | `1` | task lane 队列容量。建议保持较小，避免后台任务堆积 |
+| `--task-suspend-on-chat` | 无 | boolean | `true` | 当 chat lane 有待处理请求时，task lane 在安全点保存状态并挂起 |
+| `--cache-type-k` | 无 | String | llama.cpp 默认值 | KV cache K 类型，支持 `f16`、`q8_0` |
+| `--cache-type-v` | 无 | String | llama.cpp 默认值 | KV cache V 类型，支持 `f16`、`q8_0` |
 | `--n-gpu-layers` | `-ngl` | int | `999` | 聊天模型卸载到 GPU 的层数 |
 | `--host` | 无 | String | `127.0.0.1` | 绑定地址。当前仅允许 `127.0.0.1` |
 | `--port` | 无 | int | `8080` | 绑定端口 |
@@ -249,11 +258,16 @@ java -Djava.library.path=./libs/jjml-all ^
 | `--embedding-gpu-layers` | 无 | int | `999` | embedding 模型 GPU 卸载层数 |
 | `--embedding-alias` | 无 | String | `embedding` | embedding 模型别名 |
 | `--static-rag-path` | 无 | String | 无 | 静态 RAG 文件或文件夹路径 |
+| `--memory-rag-path` | 无 | String | 无 | 兼容旧版：单长期记忆 RAG 文件夹路径。新多世界架构推荐使用 `--rag-root-path` |
+| `--rag-root-path` | 无 | String | 无 | 多世界 / 多模组 / 多 agent RAG 根目录。启用后请求可通过 `world` + `profile` 定位 RAG |
+| `--rag-profile-refresh-interval-ms` | 无 | int | `1000` | 每个世界 `profiles.json` 的懒刷新检查间隔 |
+| `--world-static-rag-scan-interval-ms` | 无 | int | `5000` | 扫描当前世界下所有模组 `static_rag/` 的最小间隔 |
+| `--memory-rag-refresh-interval-ms` | 无 | int | `1000` | 长期记忆文件变更检查的最小间隔。服务端在 chat 请求前懒刷新，不依赖文件监听 |
 | `--static-rag-top-k` | 无 | int | `4` | 每次请求检索的静态 RAG 条数 |
 | `--dynamic-rag-top-k` | 无 | int | `4` | 每次请求检索的动态 RAG 条数 |
 | `--rag-chunk-size` | 无 | int | `900` | 静态 RAG 文本切块大小，按字符近似 |
 | `--rag-chunk-overlap` | 无 | int | `120` | 静态 RAG 切块重叠大小 |
-| `--max-queue-size` | 无 | int | `4` | 推理队列容量。队列满时返回 `429` |
+| `--max-queue-size` | 无 | int | `4` | 兼容旧参数，作为 `--chat-max-queue-size` 的默认值 |
 | `--request-timeout-seconds` | 无 | int | `300` | 非流式请求最大等待时间 |
 | `--help` | `-h` | 无 | 无 | 打印帮助信息 |
 
@@ -266,7 +280,32 @@ java -Djava.library.path=./libs/jjml-all \
      --port 8080
 ```
 
-#### 启用静态 RAG 和动态 RAG 检索
+#### 双 lane 推理启动示例
+
+服务端支持 `chat` / `task` 双 lane 推理架构：
+
+- `chat` lane 面向玩家实时对话，优先级最高，支持流式输出、静态 RAG、动态 RAG 和长期记忆 RAG。
+- `task` lane 面向压缩、摘要、记忆整理等后台任务，优先级较低，支持流式和非流式输出，默认不启用 RAG；即使显式启用 RAG，也只使用静态 RAG 和动态 RAG，不使用长期记忆 RAG。
+- 两条 lane 共享同一份 `LlamaCppModel` 模型权重，但按 lane 创建独立 `LlamaCppContext` 和 KV cache。
+- 当 `--task-suspend-on-chat true` 时，task lane 在 decode 阶段每生成一个 token 后检查是否有 chat 请求；如果有，则保存 context state、关闭 task context，让 chat 先执行，chat 空闲后再恢复 task。
+- 第一版只在 decode 安全点抢占，不在 prefill/native kernel 执行中硬中断。
+
+```bash
+java -Djava.library.path=./libs/jjml-all \
+     -jar JavaLlamaServer.jar \
+     --model /path/to/chat-model.gguf \
+     --chat-context 4096 \
+     --chat-threads 6 \
+     --chat-max-queue-size 2 \
+     --task-context 8192 \
+     --task-threads 2 \
+     --task-max-queue-size 1 \
+     --task-suspend-on-chat true \
+     --cache-type-k q8_0 \
+     --cache-type-v q8_0
+```
+
+#### 兼容模式：启用单静态 RAG、动态 RAG 与单长期记忆 RAG
 
 ```bash
 java -Djava.library.path=./libs/jjml-all \
@@ -274,11 +313,31 @@ java -Djava.library.path=./libs/jjml-all \
      --model /path/to/chat-model.gguf \
      --embedding-model /path/to/bge-large-zh-v1.5.gguf \
      --static-rag-path /path/to/rag-folder \
+     --memory-rag-path /path/to/current-world/memory_rag \
      --static-rag-top-k 4 \
      --dynamic-rag-top-k 4
 ```
 
 `--static-rag-path` 可以是单个文件，也可以是文件夹。传入文件夹时，服务端会递归扫描其中的 `.txt`、`.md`、`.json`、`.jsonl` 文件，启动时统一切块、向量化并建立内存索引。后续每次问答只会向量化用户查询和动态 RAG 条目，不会反复向量化静态文件。
+
+`--memory-rag-path` 指向单长期记忆文件夹，是兼容旧版的启动方式。服务端只读取其中的 `memories.jsonl`，不会修改该文件；服务端会在同一目录下维护 `.javallama-memory-index/` 作为长期记忆向量缓存。长期记忆 RAG 只对 `chat` lane 生效，`task` lane 即使设置 `use_rag=true` 也不会使用长期记忆系统。
+
+#### 推荐模式：启用多世界 / 多模组 / 多 Agent RAG
+
+```bash
+java -Djava.library.path=./libs/jjml-all \
+     -jar JavaLlamaServer.jar \
+     --model /path/to/chat-model.gguf \
+     --embedding-model /path/to/bge-large-zh-v1.5.gguf \
+     --rag-root-path /path/to/llm_rag \
+     --static-rag-top-k 4 \
+     --dynamic-rag-top-k 4 \
+     --memory-rag-refresh-interval-ms 1000 \
+     --rag-profile-refresh-interval-ms 1000 \
+     --world-static-rag-scan-interval-ms 5000
+```
+
+启用 `--rag-root-path` 后，服务端优先使用多世界 profile RAG 架构。请求通过 `world` 和 `profile` 定位具体世界、模组和 agent；静态 RAG 按 `static_scope` 决定检索当前模组、当前世界所有模组或指定模组列表。旧的 `--static-rag-path` / `--memory-rag-path` 不再作为主路径使用。
 
 #### Minecraft 模组侧推荐启动方式
 
@@ -289,13 +348,15 @@ java -Djava.library.path=./libs/jjml-all \
 -jar <解压出来的 JavaLlamaServer.jar>
 --model <聊天模型绝对路径>
 --embedding-model <embedding 模型绝对路径>
---static-rag-path <整合包或模组生成的知识库目录>
+--rag-root-path <llm_rag 总根目录>
 --port <本地端口>
---max-queue-size 2
+--chat-max-queue-size 2
+--task-max-queue-size 1
+--task-suspend-on-chat true
 --request-timeout-seconds 120
 ```
 
-对于 Minecraft 场景，`--max-queue-size` 不建议过大。通常 `1~4` 更适合，避免玩家或脚本短时间堆积大量推理任务。
+对于 Minecraft 场景，`--chat-max-queue-size` 和 `--task-max-queue-size` 都不建议过大。chat lane 通常 `1~4` 更适合，task lane 通常建议为 `1`，避免后台压缩、摘要或脚本任务堆积并长期占用资源。
 
 ### 4.3 模型 Profile 自动检测
 
@@ -345,10 +406,10 @@ ProcessBuilder pb = new ProcessBuilder(
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/v1/chat/completions` | 聊天补全，支持流式/非流式、thinking 控制、动态 RAG |
+| `POST` | `/v1/chat/completions` | 聊天补全与后台推理任务，支持 `lane=chat/task`、流式/非流式、thinking 控制、动态 RAG；长期记忆 RAG 仅支持 `chat` lane |
 | `POST` | `/v1/embeddings` | 文本向量化，需要启动时配置 embedding 模型 |
 | `GET` | `/v1/models` | 获取当前加载的聊天模型和 embedding 模型 |
-| `GET` | `/health` | 健康检查，包含队列和静态 RAG 状态 |
+| `GET` | `/health` | 健康检查，包含 chat/task 队列、当前 lane、task 挂起状态和静态 RAG 状态 |
 
 ### 5.2 POST /v1/chat/completions
 
@@ -357,11 +418,20 @@ ProcessBuilder pb = new ProcessBuilder(
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `messages` | Array | ✅ | 消息列表，每条包含 `role` 和 `content` |
-| `stream` | Boolean | ❌ | 是否流式输出，默认 `false` |
+| `lane` | String | ❌ | 推理 lane。可选 `chat` 或 `task`；不传默认 `chat`。`chat` 用于玩家实时对话，`task` 用于压缩、摘要、记忆整理等后台任务 |
+| `stream` | Boolean | ❌ | 是否流式输出，默认 `false`。`chat` 和 `task` lane 都支持流式；是否启用 RAG 由 `use_rag` 控制 |
 | `temperature` | Float | ❌ | 采样温度 |
 | `max_tokens` | Integer | ❌ | 最大生成 token 数 |
 | `thinking` | Boolean | ❌ | 是否开启模型思考。对 Qwen3 会自动注入 `/think` 或 `/no_think`；对 Qwen3.5 会自动设置推荐的采样参数（`temperature=1.0`, `top_p=0.95`, `top_k=20`）；其他模型不生效 |
-| `dynamic_rag` | Array | ❌ | 动态 RAG 条目列表。模组侧只需要传字符串列表或包含 `text` 的对象列表 |
+| `use_rag` | Boolean | ❌ | 是否启用 RAG。`chat` lane 默认等价于 `true`；`task` lane 默认等价于 `false`。`task` 设置为 `false` 时即使传入 `dynamic_rag` 也不会执行任何 RAG；设置为 `true` 时会执行静态 RAG + dynamic RAG |
+| `dynamic_rag` | Array | ❌ | 动态 RAG 条目列表，元素可以是字符串或包含 `text` 字段的对象。`chat` lane 默认参与 RAG；`task` lane 只有在 `use_rag=true` 时才会参与 RAG 处理 |
+| `use_memory_rag` | Boolean | ❌ | 是否启用长期记忆 RAG。仅 `chat` lane 生效；`task` lane 会忽略该字段。未传时，如果启动时配置了 `--memory-rag-path` 或 `--rag-root-path` 且请求能定位到 memory_rag，chat 请求默认启用 |
+| `memory_rag_token_budget` | Integer | ❌ | 长期记忆注入 prompt 的近似 token 预算，默认 `1000`。服务端在预算内自行决定命中并注入哪些长期记忆 |
+| `include_rag_hits` | Boolean | ❌ | 是否在响应中返回本次实际注入的 RAG 命中信息，默认 `true`。模组侧可根据返回的长期记忆 `uid` 更新 hit_count、last_hit_time、TTL 等状态 |
+| `world` | String | ❌ | 多世界 RAG 模式下的世界目录名。启用 `--rag-root-path` 后，chat 请求可通过该字段定位 `llm_rag/<world>/` |
+| `profile` | String | ❌ | 当前世界内的 RAG profile key，例如 `mod_b/guard_bob`。服务端通过 `<world>/profiles.json` 映射到具体 mod 和 agent |
+| `static_scope` | String | ❌ | 静态 RAG 范围：`none` 不使用、`mod` 当前 profile 所属模组、`world` 当前世界所有模组、`list` 指定 `static_mods` |
+| `static_mods` | Array | ❌ | 当 `static_scope=list` 时指定要使用的模组静态 RAG 列表 |
 
 **支持的 `role` 值：** `system`、`user`、`assistant`
 
@@ -379,6 +449,9 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
     "temperature": 0.6,
     "stream": true,
     "thinking": true,
+    "use_memory_rag": true,
+    "memory_rag_token_budget": 1000,
+    "include_rag_hits": true,
     "dynamic_rag": [
       "玩家背包里有铁剑、铁镐和煤炭。",
       "附近有僵尸，村庄有一名铁匠。"
@@ -395,7 +468,168 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 ]
 ```
 
-服务端会先对当前用户问题做向量检索，再把静态 RAG 与动态 RAG 共同整理进 system 上下文，然后送进聊天模型。
+服务端会先对当前用户问题做向量检索，再把命中的静态 RAG、动态 RAG 和长期记忆 RAG 整理进 system 上下文，然后送进模型。`chat` lane 默认启用 RAG；`task` lane 默认不启用 RAG，只有在显式设置 `use_rag=true` 时才会启用静态 + 动态 RAG。长期记忆 RAG 是独立的 chat-only 机制：只有 `chat` lane 会使用长期记忆，`task` lane 永远不会读取、检索或注入长期记忆。
+
+#### task lane 后台任务示例
+
+`task` lane 适合模组发起压缩、摘要、记忆整理等后台任务。服务端默认不会为 task lane 自动执行 RAG；当 `use_rag=false` 或不传时，哪怕传入 `dynamic_rag` 也不会触发任何 RAG 处理。`task` lane 可以通过 `use_rag=true` 使用静态 RAG 和动态 RAG，但不能使用长期记忆 RAG；`use_memory_rag`、`memory_rag_token_budget` 和 `include_rag_hits` 对 `task` lane 无效。`task` lane 支持流式和非流式两种模式：如果调用方设置 `stream=true`，服务端会像 chat 一样按 chunk 返回；如果设置 `stream=false`，则一次性返回完整结果。模组应根据任务类型决定是否启用 `use_rag` 和是否需要流式输出。
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{
+    "lane": "task",
+    "stream": false,
+    "use_rag": false,
+    "task_priority": 0,
+    "task_preemptible": false,
+    "messages": [
+      {"role": "system", "content": "你是记忆压缩器。请把输入压缩成稳定、可复用的摘要。"},
+      {"role": "user", "content": "这里放入模组已经收集和裁剪过的对话、事件或世界状态。"}
+    ],
+    "max_tokens": 512
+  }'
+```
+
+新增 task 时，如果队列中已经有多个后台任务，服务端会优先执行 `task_priority` 更大的任务，同优先级按提交顺序执行。例如紧急世界状态摘要可以使用 `task_priority=100`，普通长期记忆压缩可以使用 `task_priority=0`，可延后的批量整理可以使用负数优先级。已经开始执行的 task 只有在自身设置了 `task_preemptible=true` 时，才可能被队列中更高优先级的 task 在 decode 安全点抢占。chat 永远优先于 task。
+
+如果一个 task 已经开始执行，默认不会被新的 task 抢占。只有该 task 自己设置了 `task_preemptible=true`，并且队列里出现更高 `task_priority` 的 task 时，服务端才会在下一个 token 安全点保存该 task 的 context state、挂起它并执行更高优先级 task。高优先级 task 完成后，调度器会继续从已挂起 task 和待执行 task 中选择当前优先级最高的 task。
+
+如果 task 正在 decode 阶段运行，而此时有新的 chat 请求进入，在 `--task-suspend-on-chat true` 时，服务端会在下一个 token 安全点保存 task context state、释放 task context，然后优先执行 chat。chat 空闲后，服务端会重新创建 task context，加载已保存的 context state，并继续生成。对于 `task` lane 的流式请求，服务端会在生成过程中持续输出 chunk；对于非流式请求，则会在任务完成后一次性返回完整结果。
+
+#### 多世界 / 多模组 / 多 Agent RAG 目录
+
+启用 `--rag-root-path` 后，服务端按以下目录规范查找 RAG：
+
+```text
+llm_rag/
+├── world_a/
+│   ├── profiles.json
+│   ├── mod_a/
+│   │   ├── static_rag/
+│   │   └── agents/
+│   │       └── agent_001/
+│   │           └── memory_rag/
+│   │               └── memories.jsonl
+│   └── mod_b/
+│       ├── static_rag/
+│       └── agents/
+│           └── guard_bob/
+│               └── memory_rag/
+│                   └── memories.jsonl
+└── world_b/
+    ├── profiles.json
+    └── mod_c/
+        ├── static_rag/
+        └── agents/
+            └── npc_x/
+                └── memory_rag/
+                    └── memories.jsonl
+```
+
+每个世界维护自己的 `profiles.json`：
+
+```json
+{
+  "version": 1,
+  "default_profile": "mod_a/agent_001",
+  "profiles": {
+    "mod_a/agent_001": {
+      "mod": "mod_a",
+      "agent": "agent_001"
+    },
+    "mod_b/guard_bob": {
+      "mod": "mod_b",
+      "agent": "guard_bob",
+      "static_scope": "mod",
+      "memory_token_budget": 1000
+    }
+  }
+}
+```
+
+请求示例：
+
+```json
+{
+  "world": "world_a",
+  "profile": "mod_b/guard_bob",
+  "static_scope": "world",
+  "messages": [
+    {"role": "user", "content": "你知道附近发生了什么吗？"}
+  ]
+}
+```
+
+`static_scope=mod` 时只使用当前 profile 所属模组的 `static_rag/`；`static_scope=world` 时扫描并使用当前世界所有模组的 `static_rag/`；`static_scope=list` 时只使用 `static_mods` 指定的模组。静态 RAG 和长期记忆 RAG 均按完整路径缓存，同路径只加载一次。
+
+#### 长期记忆 RAG 设计
+
+长期记忆 RAG 用于承载稳定记忆，例如玩家曾经做过的事、和 NPC 的关系、偏好或世界中已经沉淀下来的事实。兼容模式下长期记忆目录由 `--memory-rag-path` 指定；多世界 profile RAG 模式下长期记忆目录固定为：
+
+```text
+llm_rag/<world>/<mod>/agents/<agent>/memory_rag/
+├── memories.jsonl
+└── .javallama-memory-index/
+```
+
+它和动态 RAG/current facts 分开处理，不会混在同一个上下文区块中。
+
+职责边界：
+
+- `memories.jsonl` 由模组侧维护，服务端只读不写。
+- `.javallama-memory-index/` 由服务端维护，用于保存长期记忆向量缓存，模组侧不修改。
+- 服务端启动和 chat 请求前会读取或刷新长期记忆索引；刷新失败时继续使用旧索引，不影响聊天服务。
+- 长期记忆 RAG 只对 `chat` lane 生效，`task` lane 不会使用长期记忆。
+
+`memories.jsonl` 使用 JSONL 格式，一行一条记忆。第一版只要求两个字段：
+
+```jsonl
+{"uid":"mem-0001","long_term_memory":"玩家第一次进入村庄时帮助铁匠找回了丢失的矿石。"}
+{"uid":"mem-0002","long_term_memory":"玩家偏好使用弓箭进行远程战斗。"}
+{"uid":"mem-0003","long_term_memory":"玩家和村民艾拉关系很好，艾拉信任玩家。"}
+```
+
+约定：
+
+- `uid` 由模组侧生成，在当前世界长期记忆库内唯一。
+- `uid` 一旦生成不复用。
+- `uid` 对应的 `long_term_memory` 可以修正；服务端会通过文本 hash 识别变化，并只重建该条记忆的向量。
+- 模组侧也可以选择删除旧 `uid` 并新增新 `uid`，用于表达语义上已经不是同一条记忆的情况。
+- 模组侧可在其他地方维护 TTL、hit_count、last_hit_time、importance 等生命周期信息；如果未来这些字段出现在 JSONL 中，服务端会忽略未知字段。
+
+写入安全约定：
+
+```text
+1. 模组侧写 memories.jsonl.tmp
+2. flush 完成
+3. 原子替换 memories.jsonl
+```
+
+服务端只读取 `memories.jsonl`，忽略 `*.tmp` 和 `*.lock`。
+
+长期记忆刷新策略：
+
+```text
+启动时加载一次
+每次 chat 请求前懒刷新
+通过 --memory-rag-refresh-interval-ms 限制文件检查频率
+检测 memories.jsonl 的修改时间和大小
+发现变化后按 uid 增量更新索引
+新增 uid 计算 embedding
+删除 uid 从索引移除
+同 uid 文本变化时只重建该条向量
+```
+
+长期记忆注入 prompt 时保持简洁和沉浸，不使用生硬的资料库提示。推荐格式：
+
+```text
+你隐约记得：
+1. 玩家和村民艾拉关系很好，艾拉信任玩家。
+2. 玩家偏好使用弓箭进行远程战斗。
+```
+
+该区块会作为独立 system 上下文拼入请求，和动态 RAG/current facts 分开。服务端会在 `memory_rag_token_budget` 的预算内自行决定实际注入哪些长期记忆；返回给模组侧的 `rag_hits.memory` 只包含本次实际注入 prompt 的长期记忆。
 
 #### 非流式响应示例
 
@@ -419,6 +653,15 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "total_tokens": 0
+  },
+  "rag_hits": {
+    "memory": [
+      {
+        "uid": "mem-0003",
+        "score": 0.8231,
+        "long_term_memory": "玩家和村民艾拉关系很好，艾拉信任玩家。"
+      }
+    ]
   }
 }
 ```
@@ -440,6 +683,14 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 
 **SSE 流式响应（逐步返回）：**
 
+如果本次 chat 请求启用了长期记忆 RAG 且 `include_rag_hits` 未显式设为 `false`，第一帧会先返回本次实际注入 prompt 的长期记忆命中信息：
+
+```
+data: {"id":"chatcmpl-a1b2c3d4","object":"chat.completion.chunk","created":1710000000,"model":"Qwen3-4B-Q4_K_M.gguf","choices":[],"rag_hits":{"memory":[{"uid":"mem-0003","score":0.8231,"long_term_memory":"玩家和村民艾拉关系很好，艾拉信任玩家。"}]}}
+```
+
+随后正常返回 token：
+
 ```
 data: {"id":"chatcmpl-a1b2c3d4","object":"chat.completion.chunk","created":1710000000,"model":"Qwen3-4B-Q4_K_M.gguf","choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}
 
@@ -457,7 +708,8 @@ data: [DONE]
 **SSE 数据格式要点：**
 
 - 每条数据以 `data: ` 前缀开头，后跟 JSON 字符串，以 `\n\n` 结尾
-- 每个 chunk 的 `delta.content` 包含本次生成的 token 文本
+- 如果启用了长期记忆 RAG，第一帧可以是 `choices: []` 的 metadata chunk，用于返回 `rag_hits.memory`
+- 每个 token chunk 的 `delta.content` 包含本次生成的 token 文本
 - 当生成结束时，发送 `finish_reason: "stop"` 的 chunk
 - 最后发送 `usage` chunk（包含 token 统计信息）
 - 最终以 `data: [DONE]\n\n` 标记流结束
@@ -505,7 +757,13 @@ curl http://127.0.0.1:8080/health
   "embedding": true,
   "static_rag_chunks": 128,
   "queue_size": 0,
-  "max_queue_size": 4
+  "max_queue_size": 2,
+  "chat_queue_size": 0,
+  "chat_max_queue_size": 2,
+  "task_queue_size": 0,
+  "task_max_queue_size": 1,
+  "current_lane": null,
+  "task_suspended": false
 }
 ```
 
@@ -884,6 +1142,13 @@ public class AiChatClient {
 
 ### A. 推理引擎内部架构
 
+服务端采用双 lane 推理架构，但模型权重只加载一份：
+
+- `chat` lane：玩家实时对话，高优先级，支持流式输出、静态 RAG、`dynamic_rag` 和长期记忆 RAG。
+- `task` lane：后台压缩、摘要、记忆整理等任务，低优先级，支持流式和非流式输出；默认不自动执行 RAG，设置 `use_rag=true` 时只启用静态 RAG 和 `dynamic_rag`，不启用长期记忆 RAG。
+- 两条 lane 共享同一个 `LlamaCppModel`，但创建各自的 `LlamaCppContext`，因此 KV cache 按 lane/task 生命周期隔离。
+- task lane 在 decode 阶段可挂起恢复；prefill 阶段和 native/GPU kernel 执行中不会被硬中断。
+
 ```
 ┌───────────────────────────────────────────────────────┐
 │                   ServerApp (入口)                      │
@@ -900,17 +1165,20 @@ public class AiChatClient {
           ▼
    ┌──────────────┐     提交任务      ┌──────────────┐
    │ InferenceTask │ ───────────────→ │  TaskExecutor │
-   │ (任务模型)     │                  │  (工作线程)    │
+   │ 含 lane 信息   │                  │ chat 优先调度  │
    └──────────────┘                   └───────┬──────┘
                                               │
                                      ┌────────▼────────┐
                                      │   LlamaEngine    │
-                                     │ (单例，模型持有者) │
+                                     │ 单模型权重持有者 │
+                                     │ chatQueue/taskQueue│
+                                     │ lane 配置与状态  │
                                      └────────┬────────┘
                                               │ 创建
                                      ┌────────▼────────┐
                                      │  LlamaCppContext │
-                                     │  (jjml 推理上下文) │
+                                     │ 按 lane 独立创建 │
+                                     │ chat/task KV 隔离│
                                      └────────┬────────┘
                                               │ 使用
                                      ┌────────▼────────┐
@@ -967,10 +1235,14 @@ Java-llama-server/
     ├── core/
     │   └── ServerApp.java        # 服务端主入口
     ├── llm/
-    │   ├── LlamaEngine.java      # LLM 推理引擎（单例）
+    │   ├── LlamaEngine.java      # LLM 推理引擎（单模型权重 + chat/task 双队列）
+    │   ├── InferenceLane.java    # 推理 lane 定义（chat/task）
+    │   ├── LaneConfig.java       # lane 上下文、线程和队列配置
+    │   ├── LaneMetrics.java      # lane 健康检查状态
+    │   ├── KvCacheType.java      # KV cache 类型映射
     │   ├── InferenceTask.java    # 推理任务模型
     │   ├── SamplerConfig.java    # 采样参数配置
-    │   └── TaskExecutor.java     # 推理任务执行器（单线程工作循环）
+    │   └── TaskExecutor.java     # 推理任务执行器（chat 优先 + task 可挂起）
     └── web/
         ├── ChatController.java   # 聊天 API 控制器（流式+同步）
         └── SseConnectionManager.java  # SSE 连接管理器
