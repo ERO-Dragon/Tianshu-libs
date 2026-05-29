@@ -1,0 +1,11 @@
+package com.rheinmetal;
+
+import net.neoforged.fml.common.Mod;
+
+@Mod(TianshuLibsMod.MOD_ID)
+public class TianshuLibsMod {
+    public static final String MOD_ID = "tianshu_libs";
+
+    public TianshuLibsMod() {
+    }
+}
