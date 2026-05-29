@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("java")
     id("com.gradleup.shadow") version "9.3.2"
@@ -30,7 +32,35 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+val nativeLibDir = layout.projectDirectory.dir("libs/jjml-all")
+val generatedNativeDir = layout.buildDirectory.dir("generated/native-resources/windows-x86_64")
+
+val generateNativeManifest = tasks.register("generateNativeManifest") {
+    inputs.dir(nativeLibDir)
+    outputs.dir(generatedNativeDir)
+    doLast {
+        val outDir = generatedNativeDir.get().asFile
+        outDir.mkdirs()
+        val dlls = nativeLibDir.asFile
+            .listFiles()
+            ?.filter { it.extension.equals("dll", ignoreCase = true) }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+        File(outDir, "native-libs.txt").writeText(dlls.joinToString("\n") { it.name })
+    }
+}
+
 tasks.shadowJar {
+    dependsOn(generateNativeManifest)
+    from("libs/jjml-all") {
+        into("natives/windows-x86_64")
+        include("*.dll")
+        exclude("ggml-vulkan.dll")
+    }
+    from(generatedNativeDir) {
+        into("natives/windows-x86_64")
+        include("native-libs.txt")
+    }
     // exclude("com/google/gson/**")
     mergeServiceFiles()
     archiveBaseName.set("JavaLlamaServer")

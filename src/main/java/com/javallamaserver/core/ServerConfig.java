@@ -6,11 +6,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class ServerConfig {
-    public static final int DEFAULT_CONTEXT_SIZE = 4096;
+    public static final int DEFAULT_CONTEXT_SIZE = 16000;
     public static final int DEFAULT_THREAD_COUNT = Runtime.getRuntime().availableProcessors();
     public static final int DEFAULT_GPU_LAYERS = 999;
     public static final String DEFAULT_HOST = "127.0.0.1";
-    public static final int DEFAULT_PORT = 8080;
+    public static final int DEFAULT_PORT = 7158;
     public static final int DEFAULT_STATIC_RAG_TOP_K = 4;
     public static final int DEFAULT_DYNAMIC_RAG_TOP_K = 4;
     public static final int DEFAULT_RAG_CHUNK_SIZE = 900;
@@ -118,6 +118,14 @@ public class ServerConfig {
             throw new ConfigException(String.join(System.lineSeparator(), errors));
         }
         return config;
+    }
+
+    static void validateOrThrow(ServerConfig config) {
+        List<String> errors = new ArrayList<>();
+        validate(config, errors);
+        if (!errors.isEmpty()) {
+            throw new ConfigException(String.join(System.lineSeparator(), errors));
+        }
     }
 
     private static String value(String[] args, int index, String option) {

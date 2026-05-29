@@ -1,9 +1,9 @@
 package com.javallamaserver.llm;
 
+import com.javallamaserver.nativelib.NativeLibraryLoader;
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppEmbeddingProcessor;
 import org.argeo.jjml.llm.LlamaCppModel;
-import org.argeo.jjml.llm.LlamaCppNative;
 import org.argeo.jjml.llm.params.ContextParam;
 import org.argeo.jjml.llm.params.ModelParam;
 import org.argeo.jjml.llm.params.PoolingType;
@@ -26,7 +26,7 @@ public class EmbeddingEngine {
     private volatile boolean running = true;
 
     static {
-        LlamaCppNative.ensureLibrariesLoaded();
+        NativeLibraryLoader.ensureLoaded();
     }
 
     private EmbeddingEngine(LlamaCppModel model, int contextSize, int threadCount, int gpuLayers, String modelAlias) {

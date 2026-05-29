@@ -1,8 +1,8 @@
 package com.javallamaserver.llm;
 
+import com.javallamaserver.nativelib.NativeLibraryLoader;
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppModel;
-import org.argeo.jjml.llm.LlamaCppNative;
 import org.argeo.jjml.llm.params.ContextParam;
 import org.argeo.jjml.llm.params.ContextParams;
 import org.argeo.jjml.llm.params.ModelParam;
@@ -41,7 +41,7 @@ public class LlamaEngine {
     private volatile boolean taskSuspended;
 
     static {
-        LlamaCppNative.ensureLibrariesLoaded();
+        NativeLibraryLoader.ensureLoaded();
     }
 
     private LlamaEngine(String engineName,

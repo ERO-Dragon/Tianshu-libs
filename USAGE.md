@@ -1,6 +1,6 @@
 # Java-Llama-Server 使用文档
 
-> **纯 Java 实现的本地大模型推理 HTTP 服务端** —— 完美替代 C++ 版 llama-server.exe，专为 Minecraft Java 模组环境深度定制
+> **纯 Java 实现的本地大模型推理服务** —— 完美替代 C++ 版 llama-server.exe，专为 Minecraft Java 模组环境深度定制，支持 **嵌入式直连** 和 **HTTP 服务** 双模式
 
 ---
 
@@ -8,10 +8,10 @@
 
 1. [项目简介](#1-项目简介)
 2. [环境准备与构建规范](#2-环境准备与构建规范)
-3. [核心架构：原生库部署与自解压逻辑](#3-核心架构原生库dllso部署与自解压逻辑)
+3. [核心架构：原生库自包含部署与自解压逻辑](#3-核心架构原生库自包含部署与自解压逻辑)
 4. [启动指南与参数说明](#4-启动指南与参数说明)
 5. [API 接口说明](#5-api-接口说明)
-6. [核心实战：Minecraft 模组集成指南](#6-核心实战minecraft-模组集成指南自解压隔离启动)
+6. [核心实战：Minecraft 模组集成指南（嵌入式直连模式）](#6-核心实战minecraft-模组集成指南嵌入式直连模式)
 
 ---
 
@@ -19,17 +19,45 @@
 
 ### 1.1 核心价值
 
-Java-Llama-Server 是一个用 **纯 Java** 编写的本地大语言模型推理 HTTP 服务端，底层基于 **jjml**（Java 对 llama.cpp 的 JNI 绑定）。它的核心使命是完美替代官方 C++ 版本的 `llama-server.exe`，并专为 Minecraft Java 模组环境进行深度定制。
+Java-Llama-Server 是一个用 **纯 Java** 编写的本地大语言模型推理服务，底层基于 **jjml**（Java 对 llama.cpp 的 JNI 绑定）。它的核心使命是完美替代官方 C++ 版本的 `llama-server.exe`，并专为 Minecraft Java 模组环境进行深度定制。
 
 **玩家的终极体验：**
 
 - **丢一个 JAR 进 mods 文件夹即可运行** —— 无需额外配置环境变量，无需安装 VC++ 运行库，无需编译 C++ 代码
 - **对外 API 100% 兼容 OpenAI 标准格式** —— 任何支持 OpenAI API 的客户端/库均可无缝对接
 - **行为与官方 llama-server.exe 完全对齐** —— 命令行参数、SSE 流式输出格式、模型管理端点均保持一致
+- **支持嵌入式直连调用** —— 模组侧直接通过 Java API 调用，零网络延迟，无需 HTTP 中转
 
-### 1.2 核心卖点：JNI 物理隔离
+### 1.2 双模式架构
 
-本项目采用 **"自解压隔离启动架构"**，这是解决 JNI 崩溃连坐问题的工业级方案：
+本项目支持两种集成模式，可根据场景灵活选择：
+
+#### 模式 A：嵌入式直连（推荐）
+
+DLL 打包在 JAR 内部，运行时自动解压加载。模组侧只需 `depend` 本 JAR，然后直接调 Java API，无需任何额外配置，**零网络延迟**。
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Minecraft 主进程 (JVM)                   │
+│  ┌─────────────┐     直接 Java 方法调用              │
+│  │  宿主模组     │ ──────────────────┐               │
+│  │  (Fabric/    │                    │               │
+│  │   Forge/NF)  │                    ▼               │
+│  └─────────────┘     ┌──────────────────────────┐   │
+│                      │  LlamaServerService       │   │
+│                      │  ┌──────────┐             │   │
+│                      │  │LlamaEngine│  ← JNI     │   │
+│                      │  │  (jjml)   │    调用     │   │
+│                      │  └──────────┘  llama.dll  │   │
+│                      └──────────────────────────┘   │
+│  ✅ 零网络延迟，直接方法调用                          │
+│  ✅ DLL 自动解压加载，无需手动配置                    │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 模式 B：隔离进程（可选，追求极致安全）
+
+通过 `ProcessBuilder` 拉起独立 JVM 进程，JNI 崩溃不影响游戏。但需要 HTTP 通信，有额外延迟。详见[附录 E](#e-隔离进程模式可选)。
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -55,14 +83,17 @@ Java-Llama-Server 是一个用 **纯 Java** 编写的本地大语言模型推理
 └─────────────────────────────────────────────────────┘
 ```
 
-**关键优势：**
+#### 两种模式对比
 
-| 问题 | 传统方案（JNI 直连） | 本项目（隔离架构） |
+| 特性 | 嵌入式直连（模式 A） | 隔离进程（模式 B） |
 |------|---------------------|-------------------|
-| C++ 底层崩溃 | 整个游戏闪退 | 仅 AI 服务进程退出，游戏继续运行 |
-| JNI 内存泄漏 | 吃掉 MC 的堆内存 | 独立进程有独立 `-Xmx`，互不干扰 |
-| 依赖冲突 | jjml 与其他模组的 JNI 库冲突 | 完全隔离的 classpath 和 library path |
-| 多加载器适配 | 需要分别为 Fabric/Forge/NF 写启动逻辑 | 全部使用标准 Java API，一份代码通吃 |
+| 通信方式 | 直接 Java 方法调用 | HTTP（Javalin） |
+| 延迟 | **零网络延迟** | 有 HTTP 序列化/反序列化开销 |
+| JNI 崩溃影响 | ⚠️ 影响整个游戏进程 | ✅ 仅 AI 进程退出，游戏继续 |
+| 内存隔离 | 共享 MC 堆内存 | 独立 `-Xmx`，互不干扰 |
+| DLL 管理 | JAR 内自动解压 | JAR 内自动解压（同模式 A） |
+| 集成复杂度 | **极简**：`depend` + 调 API | 较高：需 ProcessBuilder + HTTP 客户端 |
+| 适用场景 | 追求低延迟、简化集成 | 追求极致稳定性、可接受 HTTP 延迟 |
 
 ### 1.3 技术栈概览
 
@@ -127,80 +158,85 @@ gradlew.bat shadowJar
 
 这些机制会将 `jjml.jar` 等依赖 **原封不动** 地塞进最终模组的 `META-INF/jarjar/` 目录下，不修改任何字节码。
 
-## 3. 核心架构：原生库（DLL/SO）部署与自解压逻辑
+## 3. 核心架构：原生库自包含部署与自解压逻辑
 
-### 3.1 打包时的存放位置
-编译出的底层动态链接库必须放在该模组项目的标准资源目录下，模组加载器会在启动时自动将其提取到安全的临时沙箱目录中：
+### 3.1 自包含设计
 
-```
-src/main/resources/
-└── META-INF/
-    └── nativess/
-        ├── windows-x86_64/
-        │   ├── llama.dll
-        │   ├── ggml.dll
-        │   ├── ggml-base.dll
-        │   ├── ggml-cpu-x64.dll
-        │   ├── ggml-cpu-sse42.dll
-        │   ├── ggml-cpu-haswell.dll
-        │   ├── ggml-cpu-sandybridge.dll
-        │   ├── ggml-cpu-icelake.dll
-        │   ├── ggml-cpu-skylakex.dll
-        │   ├── ggml-cpu-cascadelake.dll
-        │   ├── ggml-cpu-alderlake.dll
-        │   ├── ggml-cpu-cannonlake.dll
-        │   ├── Java_org_argeo_jjml_ggml.dll
-        │   ├── Java_org_argeo_jjml_llm.dll
-        │   ├── Java_org_argeo_jjml_mtmd.dll
-        │   ├── Java_org_argeo_jjml_whisper.dll
-        │   └── whisper.dll
-```
-> **原理解释**：加载器不会将其解压到固定的 `game/native` 文件夹，而是解压到系统临时目录（如 `AppData/Local/Temp`）下的沙箱中，并通过修改 `java.library.path` 系统属性来暴露路径。因此，在代码中必须通过解析 `java.library.path` 来动态获取真实位置（见 6.2 节代码）。
+本项目采用与 `onnxruntime.jar` 和 `sherpa-onnx.jar` 相同的自包含设计：
 
-### 3.2 运行时的"自解压"设计思想
-
-**为什么需要自解压？** 这是一个关键问题。
-
-当我们通过 `ProcessBuilder` 拉起一个独立的 JVM 进程时，新进程面对的文件系统环境与宿主模组完全不同：
+- **DLL 打包在 JAR 内部**（`natives/windows-x86_64/*.dll`）
+- **首次调用时自动从 JAR 内解压 DLL 到临时目录**
+- **通过 `System.load(绝对路径)` 加载，不依赖 `java.library.path`**
+- **模组侧只需 `depend` 本 JAR，无需任何额外配置**
 
 ```
-❌ 新进程不认识 Fabric 的内存虚拟文件系统（如 Fabric 的嵌套 JAR 协议）
-❌ 新进程不认识 META-INF/jarjar/ 这种模组加载器特有的嵌套结构
-❌ 新进程无法通过 ClassLoader.getResource() 访问到模组内部的 JAR
+JavaLlamaServer-all.jar
+├── com/javallamaserver/...          # Java 类
+├── natives/windows-x86_64/
+│   ├── native-libs.txt              # DLL 清单（构建时自动生成）
+│   ├── ggml.dll
+│   ├── ggml-base.dll
+│   ├── ggml-cpu-x64.dll
+│   ├── ggml-cpu-sse42.dll
+│   ├── ggml-cpu-haswell.dll
+│   ├── ggml-cpu-sandybridge.dll
+│   ├── ggml-cpu-icelake.dll
+│   ├── ggml-cpu-skylakex.dll
+│   ├── ggml-cpu-cascadelake.dll
+│   ├── ggml-cpu-alderlake.dll
+│   ├── ggml-cpu-cannonlake.dll
+│   ├── llama.dll
+│   ├── Java_org_argeo_jjml_ggml.dll
+│   └── Java_org_argeo_jjml_llm.dll
+└── ...
 ```
 
-因此，模组代码在启动 HTTP Server 之前，**必须执行"自解压"**。
+> **注意**：`ggml-vulkan.dll`（54 MB）默认不打包，如需 Vulkan GPU 后端需修改 `build.gradle.kts`。
 
-**自解压的两个核心目标：**
+### 3.2 运行时自解压流程
+
+当模组代码首次引用 `LlamaServerService`、`LlamaEngine` 或 `EmbeddingEngine` 时，`NativeLibraryLoader` 自动执行以下流程：
 
 ```
-目标 1：将打包好的 JavaLlamaServer.jar（内含平铺的 Server 与 jjml 代码）从模组嵌套包中提取到物理硬盘
-        → 提取到 ./Tianshu_AI/cache目录下
-
-目标 2：获取当前 Minecraft JVM 已经加载的 llama.dll 的绝对临时路径
-        → 通过解析 java.library.path 系统属性获得
-
-目标 3：将上述路径传递给新 JVM 进程，使其能正确加载原生库
-        → 通过 -Djava.library.path=<路径> JVM 参数传递
+NativeLibraryLoader.ensureLoaded()
+  ├─ 检查是否已加载（AtomicBoolean 标志）
+  ├─ 读取 JAR 内的 natives/windows-x86_64/native-libs.txt 清单
+  ├─ 计算 native 资源指纹（清单内容 + 每个 DLL 的 SHA-256）
+  ├─ 指纹相同且目录存在？→ 跳过解压，直接使用缓存
+  ├─ 指纹不同或目录不存在？→ 清理旧目录，按清单逐个解压 DLL
+  ├─ 设置 jjml 的 4 个路径字段（3 个 setter + 1 个 System.setProperty）
+  ├─ 调用 LlamaCppNative.ensureLibrariesLoaded()
+  └─ 标记已加载
 ```
 
-### 3.3 代码中的原生库加载机制
+**解压目录策略**：
 
-在 [LlamaEngine.java](src/main/java/com/javallamaserver/llm/LlamaEngine.java) 中，通过 jjml 的静态初始化块加载原生库：
-
-```java
-static {
-    LlamaCppNative.ensureLibrariesLoaded();
-}
+```
+%TEMP%/javallamaserver-natives/<SHA-256-fingerprint>/
+├── .fingerprint          # 指纹文件，用于缓存校验
+├── ggml.dll
+├── llama.dll
+├── ggml-base.dll
+├── ggml-cpu-*.dll
+├── Java_org_argeo_jjml_ggml.dll
+├── Java_org_argeo_jjml_llm.dll
+└── ...
 ```
 
-`LlamaCppNative.ensureLibrariesLoaded()` 会调用 `System.loadLibrary()` 加载 JNI 原生库。JVM 会按照以下顺序搜索：
+- 使用 DLL 内容的 SHA-256 摘要作为子目录名，**资源不变则不重复解压**
+- 超过 7 天的旧目录自动清理
+- 使用 `native-libs.txt` 清单而非"扫描 JAR 目录"，确保在 fat JAR / nested JAR 场景下可靠运行
 
-1. `java.library.path` 系统属性指定的路径
-2. `user.dir` 当前工作目录
-3. 操作系统默认的库搜索路径
+### 3.3 为什么不用 `java.library.path`
 
-这就是为什么在拉起独立进程时，**必须正确设置 `-Djava.library.path`** 的根本原因。
+传统方案需要手动设置 `-Djava.library.path` 指向 DLL 目录，而自包含方案通过 `System.load(绝对路径)` 直接加载：
+
+| 方案 | DLL 位置 | 加载方式 | 需要手动配置 |
+|------|---------|---------|-------------|
+| 传统 | JAR 外部目录 | `System.loadLibrary()` + `java.library.path` | ✅ 需要 `-Djava.library.path` |
+| **自包含** | **JAR 内部** | **`System.load(绝对路径)`** | **❌ 不需要** |
+
+自包含方案的核心优势：模组侧无需关心 DLL 放在哪里、无需设置任何 JVM 参数，`depend` 即用。
 
 ---
 
@@ -211,12 +247,11 @@ static {
 #### 独立模式（非模组）(仅供参考)
 
 ```bash
-# 基本启动（使用默认参数）
-java -Djava.library.path=./libs/jjml-all -jar JavaLlamaServer.jar -m /path/to/model.gguf
+# 基本启动（DLL 在 JAR 内部，自动解压，无需 -Djava.library.path）
+java -jar JavaLlamaServer.jar -m /path/to/model.gguf
 
 # 完整参数启动
-java -Djava.library.path=./libs/jjml-all ^
-     -Xmx4G ^
+java -Xmx4G ^
      -jar JavaLlamaServer.jar ^
      -m D:\models\Qwen3-4B-Q4_K_M.gguf ^
      -c 4096 ^
@@ -227,7 +262,7 @@ java -Djava.library.path=./libs/jjml-all ^
      --alias qwen3-4b
 ```
 
-> **注意：** `-Djava.library.path` 必须指向包含 `llama.dll`（Windows）或 `libllama.so`（Linux）的目录。当前项目中这些文件位于 `libs/jjml-all/` 目录下。
+> **注意：** 当前版本 DLL 打包在 JAR 内部，由 `NativeLibraryLoader` 自动解压加载，**不再需要 `-Djava.library.path`**。
 
 ### 4.2 命令行参数表
 
@@ -274,8 +309,7 @@ java -Djava.library.path=./libs/jjml-all ^
 #### 普通聊天模型启动
 
 ```bash
-java -Djava.library.path=./libs/jjml-all \
-     -jar JavaLlamaServer.jar \
+java -jar JavaLlamaServer.jar \
      --model /path/to/chat-model.gguf \
      --port 8080
 ```
@@ -291,8 +325,7 @@ java -Djava.library.path=./libs/jjml-all \
 - 第一版只在 decode 安全点抢占，不在 prefill/native kernel 执行中硬中断。
 
 ```bash
-java -Djava.library.path=./libs/jjml-all \
-     -jar JavaLlamaServer.jar \
+java -jar JavaLlamaServer.jar \
      --model /path/to/chat-model.gguf \
      --chat-context 4096 \
      --chat-threads 6 \
@@ -308,8 +341,7 @@ java -Djava.library.path=./libs/jjml-all \
 #### 兼容模式：启用单静态 RAG、动态 RAG 与单长期记忆 RAG
 
 ```bash
-java -Djava.library.path=./libs/jjml-all \
-     -jar JavaLlamaServer.jar \
+java -jar JavaLlamaServer.jar \
      --model /path/to/chat-model.gguf \
      --embedding-model /path/to/bge-large-zh-v1.5.gguf \
      --static-rag-path /path/to/rag-folder \
@@ -325,8 +357,7 @@ java -Djava.library.path=./libs/jjml-all \
 #### 推荐模式：启用多世界 / 多模组 / 多 Agent RAG
 
 ```bash
-java -Djava.library.path=./libs/jjml-all \
-     -jar JavaLlamaServer.jar \
+java -jar JavaLlamaServer.jar \
      --model /path/to/chat-model.gguf \
      --embedding-model /path/to/bge-large-zh-v1.5.gguf \
      --rag-root-path /path/to/llm_rag \
@@ -337,121 +368,64 @@ java -Djava.library.path=./libs/jjml-all \
      --world-static-rag-scan-interval-ms 5000
 ```
 
-启用 `--rag-root-path` 后，服务端优先使用多世界 profile RAG 架构。请求通过 `world` 和 `profile` 定位具体世界、模组和 agent；静态 RAG 按 `static_scope` 决定检索当前模组、当前世界所有模组或指定模组列表。旧的 `--static-rag-path` / `--memory-rag-path` 不再作为主路径使用。
-
-#### Minecraft 模组侧推荐启动方式
-
-模组侧建议使用 `ProcessBuilder` 启动独立 JVM，并显式传入：
-
-```text
--Djava.library.path=<宿主侧解压出来的 native 库目录>
--jar <解压出来的 JavaLlamaServer.jar>
---model <聊天模型绝对路径>
---embedding-model <embedding 模型绝对路径>
---rag-root-path <llm_rag 总根目录>
---port <本地端口>
---chat-max-queue-size 2
---task-max-queue-size 1
---task-suspend-on-chat true
---request-timeout-seconds 120
-```
-
-对于 Minecraft 场景，`--chat-max-queue-size` 和 `--task-max-queue-size` 都不建议过大。chat lane 通常 `1~4` 更适合，task lane 通常建议为 `1`，避免后台压缩、摘要或脚本任务堆积并长期占用资源。
-
-### 4.3 模型 Profile 自动检测
-
-服务端启动时会自动检测模型类型，当前支持：
-
-| Profile | 检测条件 | thinking 控制方式 |
-|---|---|---|
-| `qwen3.5` | 模型路径或元数据包含 `qwen3.5`、`qwen3-5`、`qwen35` | `thinking: true` 时自动设置采样参数 `temperature=1.0, top_p=0.95, top_k=20`；默认不思考 |
-| `qwen3` | 模型路径或元数据包含 `qwen3` | `thinking: true` 注入 `/think`，`false` 注入 `/no_think` |
-| `deepseek-r1` | 模型路径或元数据包含 `deepseek` 和 `r1` | 不需要特殊控制，模型自带思考 |
-| `generic` | 其他所有模型 | `thinking` 字段不生效 |
-
-也可以通过 `--model-profile qwen3.5` 强制指定，跳过自动检测。
-
-### 4.4 安全限制
-
-出于安全考虑，当前服务端只允许绑定到 `127.0.0.1`。如果传入其他 host，启动配置校验会拒绝启动。
-
-这是为了防止 AI 推理服务意外暴露到局域网/公网。
-
-### 4.4 Java 版本解耦说明
-
-> **即使游戏本体运行在 Java 21（如 MC 1.20.5+），AI 服务进程依然可以运行在 Java 17及以上版本 上，互不干扰。**
-
-AI 服务进程最低要求 JDK 17，完全兼容 JDK 21 及以上版本。Java 具备严格的向后兼容性，且 JNI 底层库只要由低版本编译，即可在高版本 JVM 运行。因此，强烈推荐直接复用当前游戏本体的 Java 环境（见 6.2 节代码），无需在电脑上额外配置特定版本的 JDK，实现 MC 1.18~最新版本的通杀。
-
-```java
-// 示例：MC 运行在 Java 21，但 AI 服务使用 Java 17
-String javaPath = minecraft自己的Java路径;
-ProcessBuilder pb = new ProcessBuilder(
-    javaPath,                          // 指定 JDK 17
-    "-Xmx2G",                            // 独立内存，不抢 MC
-    "-Djava.library.path=" + dllPath,    // DLL 路径
-    "-cp", classpath,                    // 独立 classpath
-    "com.javallamaserver.core.ServerApp", // 入口类
-    "-m", modelPath,                     // 模型路径
-    "--port", "8080"                     // 端口
-);
-```
-
+---
 
 ## 5. API 接口说明
 
-本服务端兼容 OpenAI Chat Completions 的核心请求/响应格式，适合直接被 Minecraft 模组侧通过 HTTP 调用。当前重点支持聊天补全、流式输出、模型列表、健康检查、embedding 和 RAG 场景。
+### 5.1 POST /v1/chat/completions
 
-### 5.1 端点总览
+**请求地址：** `POST http://127.0.0.1:8080/v1/chat/completions`
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/v1/chat/completions` | 聊天补全与后台推理任务，支持 `lane=chat/task`、流式/非流式、thinking 控制、动态 RAG；长期记忆 RAG 仅支持 `chat` lane |
-| `POST` | `/v1/embeddings` | 文本向量化，需要启动时配置 embedding 模型 |
-| `GET` | `/v1/models` | 获取当前加载的聊天模型和 embedding 模型 |
-| `GET` | `/health` | 健康检查，包含 chat/task 队列、当前 lane、task 挂起状态和静态 RAG 状态 |
+**请求体（JSON）：**
 
-### 5.2 POST /v1/chat/completions
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `messages` | Array | **必填** | 消息列表，格式同 OpenAI |
+| `stream` | Boolean | `false` | 是否启用 SSE 流式输出 |
+| `temperature` | Double | `0.0` | 采样温度 |
+| `top_k` | Integer | `40` | Top-K 采样 |
+| `top_p` | Double | `0.95` | Top-P 采样 |
+| `min_p` | Double | `0.05` | Min-P 采样 |
+| `max_tokens` | Integer | 无限制 | 最大生成 token 数 |
+| `repeat_penalty` | Double | `1.0` | 重复惩罚 |
+| `lane` | String | `"chat"` | 推理 lane：`"chat"` 或 `"task"` |
+| `use_rag` | Boolean | chat 默认 `true`，task 默认 `false` | 是否启用 RAG |
+| `dynamic_rag` | Array/String | 无 | 动态 RAG 条目，可以是字符串数组或对象数组 |
+| `world` | String | 无 | RAG 世界标识（需启用 `--rag-root-path`） |
+| `profile` | String | 无 | RAG profile 标识（需启用 `--rag-root-path`） |
+| `static_scope` | String | `"mod"` | 静态 RAG 作用域：`"mod"` / `"world"` / `"list"` |
+| `static_mods` | Array | 无 | `static_scope=list` 时指定的模组列表 |
+| `use_memory_rag` | Boolean | `true` | 是否启用长期记忆 RAG（仅 chat lane） |
+| `memory_rag_token_budget` | Integer | 无 | 长期记忆 token 预算 |
+| `include_rag_hits` | Boolean | `true` | 是否在响应中返回 RAG 命中详情 |
+| `task_priority` | Integer | `0` | task lane 任务优先级，数值越大越优先 |
+| `task_preemptible` | Boolean | `false` | task 是否可被更高优先级 task 抢占 |
 
-#### 请求参数
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `messages` | Array | ✅ | 消息列表，每条包含 `role` 和 `content` |
-| `lane` | String | ❌ | 推理 lane。可选 `chat` 或 `task`；不传默认 `chat`。`chat` 用于玩家实时对话，`task` 用于压缩、摘要、记忆整理等后台任务 |
-| `stream` | Boolean | ❌ | 是否流式输出，默认 `false`。`chat` 和 `task` lane 都支持流式；是否启用 RAG 由 `use_rag` 控制 |
-| `temperature` | Float | ❌ | 采样温度 |
-| `max_tokens` | Integer | ❌ | 最大生成 token 数 |
-| `thinking` | Boolean | ❌ | 是否开启模型思考。对 Qwen3 会自动注入 `/think` 或 `/no_think`；对 Qwen3.5 会自动设置推荐的采样参数（`temperature=1.0`, `top_p=0.95`, `top_k=20`）；其他模型不生效 |
-| `use_rag` | Boolean | ❌ | 是否启用 RAG。`chat` lane 默认等价于 `true`；`task` lane 默认等价于 `false`。`task` 设置为 `false` 时即使传入 `dynamic_rag` 也不会执行任何 RAG；设置为 `true` 时会执行静态 RAG + dynamic RAG |
-| `dynamic_rag` | Array | ❌ | 动态 RAG 条目列表，元素可以是字符串或包含 `text` 字段的对象。`chat` lane 默认参与 RAG；`task` lane 只有在 `use_rag=true` 时才会参与 RAG 处理 |
-| `use_memory_rag` | Boolean | ❌ | 是否启用长期记忆 RAG。仅 `chat` lane 生效；`task` lane 会忽略该字段。未传时，如果启动时配置了 `--memory-rag-path` 或 `--rag-root-path` 且请求能定位到 memory_rag，chat 请求默认启用 |
-| `memory_rag_token_budget` | Integer | ❌ | 长期记忆注入 prompt 的近似 token 预算，默认 `1000`。服务端在预算内自行决定命中并注入哪些长期记忆 |
-| `include_rag_hits` | Boolean | ❌ | 是否在响应中返回本次实际注入的 RAG 命中信息，默认 `true`。模组侧可根据返回的长期记忆 `uid` 更新 hit_count、last_hit_time、TTL 等状态 |
-| `world` | String | ❌ | 多世界 RAG 模式下的世界目录名。启用 `--rag-root-path` 后，chat 请求可通过该字段定位 `llm_rag/<world>/` |
-| `profile` | String | ❌ | 当前世界内的 RAG profile key，例如 `mod_b/guard_bob`。服务端通过 `<world>/profiles.json` 映射到具体 mod 和 agent |
-| `static_scope` | String | ❌ | 静态 RAG 范围：`none` 不使用、`mod` 当前 profile 所属模组、`world` 当前世界所有模组、`list` 指定 `static_mods` |
-| `static_mods` | Array | ❌ | 当 `static_scope=list` 时指定要使用的模组静态 RAG 列表 |
-
-**支持的 `role` 值：** `system`、`user`、`assistant`
-
-#### 请求示例：带多 system、thinking 和动态 RAG
+#### 基础聊天请求示例
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json; charset=utf-8" \
   -d '{
     "messages": [
-      {"role": "system", "content": "你是 Minecraft 世界中的村民铁匠。"},
-      {"role": "system", "content": "当前时间是夜晚，玩家在村庄附近。"},
-      {"role": "user", "content": "我现在该做什么？"}
+      {"role": "system", "content": "你是 Minecraft 世界中的铁匠 NPC。"},
+      {"role": "user", "content": "我该怎么做才能在夜晚生存？"}
     ],
-    "temperature": 0.6,
-    "stream": true,
-    "thinking": true,
-    "use_memory_rag": true,
-    "memory_rag_token_budget": 1000,
-    "include_rag_hits": true,
+    "temperature": 0.7,
+    "max_tokens": 256
+  }'
+```
+
+#### 带 RAG 的聊天请求示例
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{
+    "messages": [
+      {"role": "system", "content": "你是 Minecraft 世界中的铁匠 NPC。"},
+      {"role": "user", "content": "我该怎么做才能在夜晚生存？"}
+    ],
     "dynamic_rag": [
       "玩家背包里有铁剑、铁镐和煤炭。",
       "附近有僵尸，村庄有一名铁匠。"
@@ -716,7 +690,7 @@ data: [DONE]
 - 如果队列在进入 SSE 前已经满，服务端会直接返回 HTTP `429` 和普通 JSON 错误，不会打开 SSE 流
 - 如果连接已经建立后底层发生异常，客户端应按 SSE 数据帧中的错误 JSON 或连接结束进行容错处理
 
-### 5.3 GET /v1/models
+### 5.2 GET /v1/models
 
 **请求：**
 
@@ -741,7 +715,7 @@ curl http://127.0.0.1:8080/v1/models
 
 > `id` 字段的值由启动参数 `--alias` 决定。如果不指定，则自动从模型文件路径中提取文件名。
 
-### 5.4 GET /health
+### 5.3 GET /health
 
 **请求：**
 
@@ -777,7 +751,7 @@ HTTP 状态码：`200`
 
 HTTP 状态码：`503`
 
-### 5.5 POST /v1/embeddings
+### 5.4 POST /v1/embeddings
 
 该接口用于把文本转换为向量。只有启动时传入 `--embedding-model` 后才可用。
 
@@ -804,7 +778,7 @@ curl -X POST http://127.0.0.1:8080/v1/embeddings \
 }
 ```
 
-### 5.6 错误响应格式
+### 5.5 错误响应格式
 
 所有错误均返回标准 JSON 格式：
 
@@ -824,317 +798,213 @@ curl -X POST http://127.0.0.1:8080/v1/embeddings \
 
 ---
 
-## 6. 核心实战：Minecraft 模组集成指南（自解压隔离启动）
+## 6. 核心实战：Minecraft 模组集成指南（嵌入式直连模式）
 
-> **本章是重中之重**，详细阐述这套工业级架构的落地代码流程。
+> **推荐集成方式** —— 零网络延迟，DLL 自动管理，API 调用极简。
 
-### 6.1 工程代码结构设计
+### 6.1 依赖配置
 
-在同一个 IDEA 工程中，需要维护 **两个逻辑包**，职责完全分离：
+#### Fabric（`build.gradle`）
 
-```
-src/main/java/com/yourname/
-├── mod/                            ← 宿主模组代码（运行在 MC 主进程）
-│   ├── YourMod.java                # 模组主类，注册生命周期事件
-│   ├── AiServerLauncher.java       # AI 服务进程启动器（自解压 + ProcessBuilder）
-│   └── AiChatClient.java           # HTTP 客户端，调用 AI 服务的 API
-│
-└── server/                         ← 独立服务端代码（运行在独立 JVM 进程）
-    ├── ServerApp.java              # HTTP 服务入口（Javalin 启动、参数解析）
-    ├── llm/
-    │   ├── LlamaEngine.java        # LLM 推理引擎（jjml 封装）
-    │   ├── InferenceTask.java      # 推理任务模型
-    │   ├── SamplerConfig.java      # 采样参数配置
-    │   └── TaskExecutor.java       # 推理任务执行器
-    └── web/
-        ├── ChatController.java     # 聊天 API 控制器
-        └── SseConnectionManager.java  # SSE 连接管理
+```groovy
+dependencies {
+    include("com.rheinmetal:JavaLlamaServer:1.0.1")
+}
 ```
 
-**两个包的本质区别：**
+#### Forge / NeoForge（`build.gradle`）
 
-| 特征 | `com.yourname.mod`（宿主） | `com.yourname.server`（独立服务） |
-|------|---------------------------|----------------------------------|
-| 运行进程 | Minecraft 主 JVM | 独立子 JVM |
-| 可访问 MC API | ✅ 可以 | ❌ 不可以 |
-| 可访问 JNI | ❌ 不直接访问 | ✅ 通过 jjml 访问 |
-| 生命周期 | 随游戏启停 | 由宿主通过 ProcessBuilder 控制 |
-| 崩溃影响 | 影响整个游戏 | 仅影响 AI 功能 |
-
-### 6.2 运行时启动三步曲
-
-以下给出完整的 Java 示例代码，展示如何从模组端启动独立的 AI 服务进程。
-
-#### 第 1 步：自解压依赖
-
-将嵌套在模组内部的 JavaLlamaServer.jar 完整提取到物理硬盘，并解析出 DLL 路径：
-```java
-    package com.yourname.mod;
-
-    import java.io.*;
-    import java.nio.file.*;
-
-    public class AiServerLauncher {
-    // 假设模组打包时，Server JAR 被放在了 resources 的根目录下或 jarjar 下
-    // 请根据实际 Fabric Loom / Forge 打包出的路径进行调整，常见如 “META-INF/jarjar/JavaServer-Fat-all.jar”
-    private static final String INNER_SERVER_JAR_PATH = “META-INF/jarjar/JavaServer-Fat-all.jar”;
-    private static final String EXTRACTED_SERVER_JAR_NAME = “JavaServer-Fat-all.jar”;
-
-    /**
-     * 将内嵌的 Server JAR 提取到运行目录（物理硬盘）
-     */
-    private static Path extractServerJar() throws IOException {
-        Path runDir = Path.of(".").toAbsolutePath();
-        Path targetFile = runDir.resolve(EXTRACTED_SERVER_JAR_NAME);
-        
-        if (Files.exists(targetFile)) {
-            return targetFile; // 已经提取过，直接返回
-        }
-
-        // 通过 ClassLoader 读取模组内部嵌套的 JAR
-        try (InputStream is = AiServerLauncher.class.getClassLoader().getResourceAsStream(INNER_SERVER_JAR_PATH)) {
-            if (is == null) {
-                throw new FileNotFoundException("无法在模组包内找到: " + INNER_SERVER_JAR_PATH);
-            }
-            Files.copy(is, targetFile, StandardCopyOption.REPLACE_EXISTING);
-            System.out.println("[AiServer] 已将内嵌 Server 解压至物理路径: " + targetFile);
-        }
-        return targetFile;
-    }
-
-    /**
-     * 解析当前 JVM 已加载的 llama.dll 的物理路径
-     */
-    private static String resolveNativeLibPath() {
-        String libPath = System.getProperty("java.library.path");
-        if (libPath == null || libPath.isEmpty()) throw new RuntimeException("java.library.path 未设置!");
-
-        String[] paths = libPath.split(File.pathSeparator);
-        String dllName = System.getProperty("os.name").toLowerCase().contains("win") ? "llama.dll" : "libllama.so";
-        
-        for (String path : paths) {
-            if (new File(path, dllName).exists()) {
-                return new File(path).getAbsolutePath();
-            }
-        }
-        throw new RuntimeException("在 java.library.path 中找不到原生库: " + libPath);
-    }
+```groovy
+dependencies {
+    jarJar(group: "com.rheinmetal", name: "JavaLlamaServer", version: "1.0.1")
+}
 ```
-#### 第 2 步：拉起独立 JVM 进程
-使用 `ProcessBuilder` 直接将解压出的物理 JAR 路径丢给 `-cp`：
-```java
-    private static Process aiServerProcess;
 
-    public static void startAiServer(String modelPath, int port) throws Exception {
-        // 1. 提取内嵌的 Server JAR 到硬盘，并拿到绝对路径
-        Path serverJarPath = extractServerJar();
-        
-        // 2. 获取 DLL 路径
-        String nativeLibPath = resolveNativeLibPath();
-
-        // 3. 构建启动命令
-        List<String> command = new ArrayList<>();
-        // 推荐直接复用游戏当前的 Java 路径，完美兼容 JDK 17 / 21
-        command.add(ProcessHandle.current().info().command().orElse("java")); 
-        command.add("-Xmx2G"); // 独立内存
-        // ⚠️ 极其重要：必须加上双引号，防止 Windows 临时路径中的空格截断参数
-        command.add("-Djava.library.path=\"" + nativeLibPath + "\""); 
-        command.add("-cp");
-        // 🌟 绝杀点：直接指向解压出来的 Fat JAR，不需要拼任何其他依赖！
-        command.add(serverJarPath.toAbsolutePath().toString()); 
-        command.add("com.javallamaserver.core.ServerApp"); // Server 入口类
-        command.add("-m"); command.add(modelPath);
-        command.add("--port"); command.add(String.valueOf(port));
-        command.add("-ngl"); command.add("999");
-
-        System.out.println("[AiServer] 启动命令: " + String.join(" ", command));
-
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectErrorStream(true);
-        pb.directory(new File(".")); // 建议工作目录与游戏运行目录一致
-        aiServerProcess = pb.start();
-
-        // ... (后续的日志消费线程 waitForServerReady 等代码保持原样不变) ...
-    }
-
-    /**
-     * 停止 AI 服务进程
-     */
-    public static void stopAiServer() {
-        if (aiServerProcess != null && aiServerProcess.isAlive()) {
-            System.out.println("[AiServer] Stopping AI server process...");
-            aiServerProcess.destroy();
-            try {
-                if (!aiServerProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                    aiServerProcess.destroyForcibly();
-                }
-            } catch (InterruptedException e) {
-                aiServerProcess.destroyForcibly();
-            }
-        }
-    }
-
-```
-### 6.3 三端通用与生命周期管理
-
-#### 为什么一份代码通吃三大加载器？
-
-上述"自解压 + ProcessBuilder"逻辑 **全部使用 `java.io` 和 `java.lang` 的标准 API**：
-
-| 使用的 API | 所属包 | 是否模组加载器相关 |
-|-----------|--------|------------------|
-| `ClassLoader.getResourceAsStream()` | `java.lang` | ❌ 标准Java |
-| `Files.copy()` | `java.nio.file` | ❌ 标准Java |
-| `System.getProperty()` | `java.lang` | ❌ 标准Java |
-| `ProcessBuilder` | `java.lang` | ❌ 标准Java |
-| `getClass().getProtectionDomain()` | `java.lang` | ❌ 标准Java |
-
-**不依赖任何模组加载器特有的 API**，因此 Fabric / Forge / NeoForge 通用一份代码。
-
-#### 生命周期管理：防止僵尸进程
-
-在游戏关闭时，必须调用 `process.destroy()` 终止 AI 服务进程，否则会留下僵尸进程占用 GPU 和内存。
-
-**Fabric 生命周期监听：**
+### 6.2 基础用法
 
 ```java
+import com.javallamaserver.core.LlamaServerService;
+import com.javallamaserver.web.ChatController.ChatMessage;
+import com.javallamaserver.llm.SamplerConfig;
+import java.util.concurrent.CompletableFuture;
+
 public class YourMod implements ModInitializer {
+    private LlamaServerService aiService;
+
     @Override
     public void onInitialize() {
-        // 模组加载时启动 AI 服务
-        try {
-            AiServerLauncher.startAiServer("models/qwen3-4b.gguf", 8080);
-        } catch (Exception e) {
-            System.err.println("Failed to start AI server: " + e.getMessage());
-        }
+        aiService = LlamaServerService.builder()
+            .chatModel(resolveModelPath("qwen3-4b-q4_k_m.gguf"))
+            .chatContext(4096)
+            .chatThreads(4)
+            .gpuLayers(999)
+            .embeddingModel(resolveModelPath("bge-large-zh-v1.5.gguf"))
+            .ragRootPath(resolveRagPath("llm_rag"))
+            .build();
 
-        // 注册关闭事件
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-            AiServerLauncher.stopAiServer();
+        CompletableFuture.runAsync(() -> {
+            try {
+                aiService.start();
+                System.out.println("[YourMod] AI 服务就绪");
+            } catch (Exception e) {
+                System.err.println("[YourMod] AI 服务启动失败: " + e.getMessage());
+            }
         });
     }
 }
 ```
 
-**Forge / NeoForge 生命周期监听：**
+**关键说明：**
+
+- `LlamaServerService` 类加载时，`NativeLibraryLoader` 自动解压并加载 DLL，**无需任何手动配置**
+- `start()` 会加载模型、初始化 RAG 索引，耗时较长，**务必异步调用**，不要阻塞 MC 主线程
+- `startWithHttp(port)` 在嵌入式基础上同时启动 HTTP 服务，方便调试
+
+### 6.3 API 速查
+
+`LlamaServerService` 提供以下方法，**全部是直接 Java 方法调用，无 HTTP 开销**：
+
+#### 同步聊天
 
 ```java
-@Mod("yourmod")
-public class YourMod {
-    public YourMod(IEventBus modEventBus) {
-        // 模组加载时启动 AI 服务
-        modEventBus.addListener(this::onCommonSetup);
-        // 注册关闭事件
-        MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
-    }
+// 简写：单条消息 + system prompt
+String reply = aiService.chatSync("你好", "你是铁匠NPC");
 
-    private void onCommonSetup(FMLCommonSetupEvent event) {
-        event.enqueueWork(() -> {
-            try {
-                AiServerLauncher.startAiServer("models/qwen3-4b.gguf", 8080);
-            } catch (Exception e) {
-                System.err.println("Failed to start AI server: " + e.getMessage());
-            }
-        });
-    }
+// 完整：自定义消息列表 + 采样参数 + maxTokens
+List<ChatMessage> messages = List.of(
+    new ChatMessage("system", "你是铁匠NPC"),
+    new ChatMessage("user", "我需要一把剑")
+);
+SamplerConfig sampler = new SamplerConfig();
+sampler.setTemperature(0.7);
+sampler.setTopP(0.9);
+String reply = aiService.chatSync(messages, sampler, 256);
+```
 
-    private void onServerStopping(FMLServerStoppingEvent event) {
-        AiServerLauncher.stopAiServer();
-    }
-}
+#### 流式聊天
+
+```java
+// 简写
+aiService.chatStream("你好", "你是铁匠NPC", token -> {
+    System.out.print(token);
+});
+
+// 完整：自定义消息列表 + 采样参数
+aiService.chatStream(messages, sampler, token -> {
+    // 每个 token 实时回调
+    broadcastToPlayer(token);
+});
+```
+
+#### 后台任务（Task Lane）
+
+```java
+CompletableFuture<String> future = aiService.submitTask(
+    List.of(
+        new ChatMessage("system", "你是记忆压缩器"),
+        new ChatMessage("user", longConversationText)
+    ),
+    null,       // sampler（null 使用默认）
+    512,        // maxTokens
+    0,          // priority
+    false       // preemptible
+);
+
+future.thenAccept(summary -> {
+    System.out.println("压缩结果: " + summary);
+});
+```
+
+#### 服务状态
+
+```java
+aiService.isReady();            // 模型是否加载完成
+aiService.hasChatQueueCapacity(); // chat 队列是否还有空位
+aiService.getChatQueueSize();   // 当前 chat 队列长度
+```
+
+#### 关闭服务
+
+```java
+aiService.shutdown();           // 释放模型、关闭 HTTP 服务（如有）
+```
+
+### 6.4 Builder 参数完整列表
+
+| Builder 方法 | 对应命令行参数 | 默认值 | 说明 |
+|-------------|--------------|--------|------|
+| `chatModel(path)` | `--model` | 无 | **必填**，聊天模型路径 |
+| `chatContext(n)` | `--chat-context` | `4096` | chat lane 上下文窗口 |
+| `chatThreads(n)` | `--chat-threads` | CPU 核心数 | chat lane 推理线程数 |
+| `chatMaxQueueSize(n)` | `--chat-max-queue-size` | `4` | chat lane 队列容量 |
+| `gpuLayers(n)` | `--n-gpu-layers` | `999` | GPU 卸载层数 |
+| `modelAlias(name)` | `--alias` | 文件名 | 模型别名 |
+| `modelProfile(name)` | `--model-profile` | 自动识别 | 模型适配 profile |
+| `cacheTypeK(type)` | `--cache-type-k` | 默认 | KV cache K 类型 |
+| `cacheTypeV(type)` | `--cache-type-v` | 默认 | KV cache V 类型 |
+| `embeddingModel(path)` | `--embedding-model` | 无 | embedding 模型路径 |
+| `embeddingContext(n)` | `--embedding-context` | `4096` | embedding 上下文窗口 |
+| `embeddingThreads(n)` | `--embedding-threads` | CPU 核心数 | embedding 线程数 |
+| `embeddingGpuLayers(n)` | `--embedding-gpu-layers` | `999` | embedding GPU 层数 |
+| `embeddingAlias(name)` | `--embedding-alias` | `embedding` | embedding 模型别名 |
+| `staticRagPath(path)` | `--static-rag-path` | 无 | 静态 RAG 路径 |
+| `memoryRagPath(path)` | `--memory-rag-path` | 无 | 长期记忆 RAG 路径 |
+| `ragRootPath(path)` | `--rag-root-path` | 无 | 多世界 RAG 根目录 |
+| `ragChunkSize(n)` | `--rag-chunk-size` | `900` | RAG 切块大小 |
+| `ragChunkOverlap(n)` | `--rag-chunk-overlap` | `120` | RAG 切块重叠 |
+| `staticRagTopK(n)` | `--static-rag-top-k` | `4` | 静态 RAG 检索条数 |
+| `dynamicRagTopK(n)` | `--dynamic-rag-top-k` | `4` | 动态 RAG 检索条数 |
+| `taskContext(n)` | `--task-context` | 同 chatContext | task lane 上下文窗口 |
+| `taskThreads(n)` | `--task-threads` | `min(2, CPU)` | task lane 线程数 |
+| `taskMaxQueueSize(n)` | `--task-max-queue-size` | `1` | task lane 队列容量 |
+| `taskSuspendOnChat(b)` | `--task-suspend-on-chat` | `true` | chat 优先时挂起 task |
+| `requestTimeoutSeconds(n)` | `--request-timeout-seconds` | `300` | 请求超时秒数 |
+
+### 6.5 生命周期管理
+
+在游戏关闭时调用 `shutdown()` 释放 GPU 资源：
+
+**Fabric：**
+
+```java
+ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+    if (aiService != null) aiService.shutdown();
+});
+```
+
+**Forge / NeoForge：**
+
+```java
+MinecraftForge.EVENT_BUS.addListener((FMLServerStoppingEvent e) -> {
+    if (aiService != null) aiService.shutdown();
+});
 ```
 
 **双重保险：ShutdownHook**
 
-除了模组生命周期事件外，建议在 `startAiServer()` 中添加一个 JVM ShutdownHook 作为兜底：
-
 ```java
 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-    if (aiServerProcess != null && aiServerProcess.isAlive()) {
-        System.err.println("[AiServer] ShutdownHook: Force killing AI server...");
-        aiServerProcess.destroyForcibly();
-    }
-}, "ai-server-shutdown-hook"));
+    if (aiService != null) aiService.shutdown();
+}));
 ```
 
-### 6.4 模组 HTTP 请求编码陷阱
+### 6.6 嵌入式模式下的 Embedding 访问
 
-> **这是一个极易踩坑的问题，尤其是在处理中文输入时。**
+嵌入式模式下，`/v1/embeddings` 和 `/v1/models` HTTP 端点默认不启动。如需访问 embedding 功能或模型信息，有两种方式：
 
-#### 问题根源
-
-当模组端构建 HTTP 请求 JSON 时，如果不显式指定 UTF-8 编码，中文字符可能会被 JVM 默认编码（如 Windows 上的 GBK）处理，导致服务端收到乱码。
-
-#### 错误示例 ❌
+**方式一：同时启动 HTTP 服务（推荐调试用）**
 
 ```java
-// ❌ 错误：没有指定编码，Windows 环境下中文会变成 GBK
-OutputStream os = conn.getOutputStream();
-os.write(jsonString.getBytes()); // 使用平台默认编码！
+aiService.startWithHttp(8080);
+// 此时 /v1/embeddings、/v1/models、/health 等 HTTP 端点均可访问
 ```
 
-#### 正确示例 ✅
+**方式二：纯嵌入式访问 EmbeddingEngine**
 
 ```java
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-
-public class AiChatClient {
-
-    private static final String SERVER_URL = "http://127.0.0.1:8080/v1/chat/completions";
-
-    public static String chat(String userMessage) throws Exception {
-        // 1. 构建 JSON（使用 Gson 的 disableHtmlEscaping 确保中文不被转义）
-        Gson gson = new GsonBuilder().disableHtmlEscaping().create();
-        String jsonBody = gson.toJson(Map.of(
-            "messages", List.of(
-                Map.of("role", "user", "content", userMessage)
-            ),
-            "stream", false,
-            "temperature", 0.7
-        ));
-
-        // 2. 发送请求
-        URL url = new URL(SERVER_URL);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-
-        // ✅ 关键：Content-Type 中显式指定 charset=utf-8
-        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setConnectTimeout(5000);
-        conn.setReadTimeout(60000);
-
-        // ✅ 关键：getBytes() 必须传入 "UTF-8"
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(jsonBody.getBytes("UTF-8"));
-            os.flush();
-        }
-
-        // 3. 读取响应（同样使用 UTF-8）
-        int responseCode = conn.getResponseCode();
-        try (InputStream is = conn.getInputStream();
-             InputStreamReader isr = new InputStreamReader(is, "UTF-8")) {
-            JsonObject response = gson.fromJson(isr, JsonObject.class);
-            return response.getAsJsonArray("choices")
-                    .get(0).getAsJsonObject()
-                    .getAsJsonObject("message")
-                    .get("content").getAsString();
-        }
-    }
-}
+// 通过 ModelRegistry 访问（需自行持有引用，当前 API 未直接暴露）
+// 未来版本可能提供 aiService.embed() 等便捷方法
 ```
-
-**编码要点总结：**
-
-| 环节 | 正确做法 | 常见错误 |
-|------|---------|---------|
-| JSON 序列化 | `GsonBuilder().disableHtmlEscaping()` | 默认 Gson 会将中文转义为 `\uXXXX` |
-| 请求头 | `Content-Type: application/json; charset=utf-8` | 仅写 `application/json`，不指定编码 |
-| 请求体 | `jsonBody.getBytes("UTF-8")` | `jsonBody.getBytes()` 使用平台默认编码 |
-| 响应读取 | `new InputStreamReader(is, "UTF-8")` | `new InputStreamReader(is)` 使用平台默认编码 |
 
 ---
 
@@ -1207,13 +1077,13 @@ public class AiChatClient {
 
 | 问题 | 可能原因 | 解决方案 |
 |------|---------|---------|
-| `UnsatisfiedLinkError` | DLL/SO 未找到或架构不匹配 | 检查 `-Djava.library.path` 是否指向正确的目录 |
+| `UnsatisfiedLinkError` | DLL 未自动解压或架构不匹配 | 检查 JAR 内 `natives/` 目录是否完整；确认操作系统架构 |
 | `Model file not found` | 模型路径错误 | 使用绝对路径指定 `.gguf` 文件 |
 | 启动后立即退出 | 绑定了 `0.0.0.0` | 改为 `127.0.0.1` |
-| 流式输出中文乱码 | 编码未指定 UTF-8 | 参见 6.4 节编码陷阱 |
-| GPU 未被使用 | `-ngl` 设置为 0 或 CUDA 不可用 | 确保安装了 CUDA 驱动，`-ngl` 设为 999 |
+| 流式输出中文乱码 | 编码未指定 UTF-8 | 嵌入式模式无此问题；HTTP 模式确保 `charset=utf-8` |
+| GPU 未被使用 | `-ngl` 设置为 0 或 CUDA 不可用 | 确保安装了 CUDA 驱动，`gpuLayers(999)` |
 | `Engine already initialized` | 重复初始化 | LlamaEngine 是单例，只能初始化一次 |
-| 中文输入后模型输出异常 | 请求编码问题 | 确保 `String.getBytes("UTF-8")` 和 `charset=utf-8` |
+| 中文输入后模型输出异常 | 请求编码问题 | 嵌入式模式无此问题；HTTP 模式确保 `String.getBytes("UTF-8")` |
 
 ### D. 目录结构速查
 
@@ -1233,9 +1103,11 @@ Java-llama-server/
 │       └── ...
 └── src/main/java/com/javallamaserver/
     ├── core/
-    │   └── ServerApp.java        # 服务端主入口
+    │   ├── ServerApp.java        # 服务端主入口
+    │   └── LlamaServerService.java  # 嵌入式 API 门面（Builder 模式）
     ├── llm/
     │   ├── LlamaEngine.java      # LLM 推理引擎（单模型权重 + chat/task 双队列）
+    │   ├── EmbeddingEngine.java  # Embedding 推理引擎
     │   ├── InferenceLane.java    # 推理 lane 定义（chat/task）
     │   ├── LaneConfig.java       # lane 上下文、线程和队列配置
     │   ├── LaneMetrics.java      # lane 健康检查状态
@@ -1243,7 +1115,119 @@ Java-llama-server/
     │   ├── InferenceTask.java    # 推理任务模型
     │   ├── SamplerConfig.java    # 采样参数配置
     │   └── TaskExecutor.java     # 推理任务执行器（chat 优先 + task 可挂起）
+    ├── nativelib/
+    │   └── NativeLibraryLoader.java  # DLL 自解压与加载
+    ├── rag/
+    │   └── RagService.java       # RAG 服务（静态/动态/长期记忆）
     └── web/
         ├── ChatController.java   # 聊天 API 控制器（流式+同步）
         └── SseConnectionManager.java  # SSE 连接管理器
+```
+
+### E. 隔离进程模式（可选）
+
+> **仅当你的场景对 JNI 崩溃零容忍时才需要此模式**。绝大多数模组推荐使用[嵌入式直连模式](#6-核心实战minecraft-模组集成指南嵌入式直连模式)。
+
+隔离进程模式通过 `ProcessBuilder` 拉起独立 JVM 运行 JavaLlamaServer，AI 进程崩溃不会影响游戏。代价是需要 HTTP 通信，有额外延迟。
+
+#### E.1 工作原理
+
+```
+模组侧                              AI 服务进程（独立 JVM）
+  │                                      │
+  │  1. extractServerJar()               │
+  │     从 JAR-in-JAR 中提取              │
+  │     JavaLlamaServer.jar              │
+  │                                      │
+  │  2. ProcessBuilder                   │
+  │     java -cp JavaLlamaServer.jar ──→ │  NativeLibraryLoader 自动解压 DLL
+  │     ServerApp -m model.gguf          │  加载模型、启动 Javalin HTTP
+  │                                      │
+  │  3. HTTP 请求 ──────────────────────→│  处理推理请求
+  │     POST /v1/chat/completions        │
+  │                                      │
+  │  ←──────────────────── HTTP 响应     │
+```
+
+#### E.2 启动代码
+
+```java
+public class AiServerLauncher {
+    private static final String INNER_JAR = "META-INF/jarjar/JavaServer-Fat-all.jar";
+    private static Process aiServerProcess;
+
+    private static Path extractServerJar() throws IOException {
+        Path target = Path.of(".").toAbsolutePath().resolve("JavaServer-Fat-all.jar");
+        if (Files.exists(target)) return target;
+        try (InputStream is = AiServerLauncher.class.getClassLoader()
+                .getResourceAsStream(INNER_JAR)) {
+            if (is == null) throw new FileNotFoundException("未找到: " + INNER_JAR);
+            Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        return target;
+    }
+
+    public static void startAiServer(String modelPath, int port) throws Exception {
+        Path jar = extractServerJar();
+        List<String> cmd = List.of(
+            ProcessHandle.current().info().command().orElse("java"),
+            "-Xmx2G",
+            "-cp", jar.toAbsolutePath().toString(),
+            "com.javallamaserver.core.ServerApp",
+            "-m", modelPath,
+            "--port", String.valueOf(port),
+            "-ngl", "999"
+        );
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        aiServerProcess = pb.start();
+    }
+
+    public static void stopAiServer() {
+        if (aiServerProcess != null && aiServerProcess.isAlive()) {
+            aiServerProcess.destroy();
+            try {
+                if (!aiServerProcess.waitFor(10, TimeUnit.SECONDS))
+                    aiServerProcess.destroyForcibly();
+            } catch (InterruptedException e) {
+                aiServerProcess.destroyForcibly();
+            }
+        }
+    }
+}
+```
+
+> **注意：** 不再需要 `-Djava.library.path`，`NativeLibraryLoader` 会自动从 JAR 内解压 DLL。
+
+#### E.3 HTTP 客户端编码要点
+
+隔离进程模式下，模组侧通过 HTTP 调用 AI 服务。**务必注意编码**：
+
+```java
+// ✅ 正确：显式指定 UTF-8
+conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+os.write(jsonBody.getBytes("UTF-8"));
+
+// ❌ 错误：使用平台默认编码（Windows 上是 GBK）
+os.write(jsonBody.getBytes());
+```
+
+| 环节 | 正确做法 |
+|------|---------|
+| JSON 序列化 | `GsonBuilder().disableHtmlEscaping()` |
+| 请求头 | `Content-Type: application/json; charset=utf-8` |
+| 请求体 | `jsonBody.getBytes("UTF-8")` |
+| 响应读取 | `new InputStreamReader(is, "UTF-8")` |
+
+#### E.4 生命周期管理
+
+```java
+// Fabric
+ServerLifecycleEvents.SERVER_STOPPING.register(server -> AiServerLauncher.stopAiServer());
+
+// Forge / NeoForge
+MinecraftForge.EVENT_BUS.addListener((FMLServerStoppingEvent e) -> AiServerLauncher.stopAiServer());
+
+// 兜底 ShutdownHook
+Runtime.getRuntime().addShutdownHook(new Thread(() -> AiServerLauncher.stopAiServer()));
 ```

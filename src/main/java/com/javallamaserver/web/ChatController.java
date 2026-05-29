@@ -18,6 +18,7 @@ import org.argeo.jjml.llm.LlamaCppChatMessage;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -207,6 +208,78 @@ public class ChatController {
         }
     }
 
+    public String executeSyncChat(ChatRequest request, SamplerConfig samplerOverride) throws Exception {
+        validateProgrammaticRequest(request);
+        AugmentedRequest augmentedRequest = augmentRequest(request);
+        List<LlamaCppChatMessage> messages = convertMessages(augmentedRequest.messages, request.thinking);
+        SamplerConfig samplerConfig = samplerOverride != null ? samplerOverride : buildSamplerConfig(request);
+        int maxTokens = normalizeMaxTokens(request.max_tokens);
+        int taskPriority = normalizeTaskPriority(request.task_priority);
+        boolean taskPreemptible = Boolean.TRUE.equals(request.task_preemptible);
+        InferenceLane lane = request.resolveLane();
+        if (!chatEngine.hasQueueCapacity(lane)) {
+            throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
+        }
+        InferenceTask task = InferenceTask.syncChat(lane, messages, samplerConfig, maxTokens, taskPriority, taskPreemptible);
+        chatEngine.submitTask(task);
+        return ReasoningCleaner.clean(task.getSyncFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS)).trim();
+    }
+
+    public CompletableFuture<String> executeStreamChat(ChatRequest request,
+                                                       SamplerConfig samplerOverride,
+                                                       Consumer<String> tokenConsumer) {
+        try {
+            validateProgrammaticRequest(request);
+            AugmentedRequest augmentedRequest = augmentRequest(request);
+            List<LlamaCppChatMessage> messages = convertMessages(augmentedRequest.messages, request.thinking);
+            SamplerConfig samplerConfig = samplerOverride != null ? samplerOverride : buildSamplerConfig(request);
+            int maxTokens = normalizeMaxTokens(request.max_tokens);
+            int taskPriority = normalizeTaskPriority(request.task_priority);
+            boolean taskPreemptible = Boolean.TRUE.equals(request.task_preemptible);
+            InferenceLane lane = request.resolveLane();
+            if (!chatEngine.hasQueueCapacity(lane)) {
+                throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
+            }
+
+            ReasoningCleaner cleaner = new ReasoningCleaner();
+            InferenceTask task = InferenceTask.stream(lane, messages, samplerConfig, maxTokens, taskPriority, taskPreemptible, token -> {
+                String cleaned = cleaner.feed(token);
+                if (!cleaned.isEmpty() && tokenConsumer != null) {
+                    tokenConsumer.accept(cleaned);
+                }
+            });
+            chatEngine.submitTask(task);
+            return task.getSyncFuture().thenApply(text -> ReasoningCleaner.clean(text).trim());
+        } catch (Exception e) {
+            CompletableFuture<String> future = new CompletableFuture<>();
+            future.completeExceptionally(e);
+            return future;
+        }
+    }
+
+    public CompletableFuture<String> executeAsyncChat(ChatRequest request, SamplerConfig samplerOverride) {
+        try {
+            validateProgrammaticRequest(request);
+            AugmentedRequest augmentedRequest = augmentRequest(request);
+            List<LlamaCppChatMessage> messages = convertMessages(augmentedRequest.messages, request.thinking);
+            SamplerConfig samplerConfig = samplerOverride != null ? samplerOverride : buildSamplerConfig(request);
+            int maxTokens = normalizeMaxTokens(request.max_tokens);
+            int taskPriority = normalizeTaskPriority(request.task_priority);
+            boolean taskPreemptible = Boolean.TRUE.equals(request.task_preemptible);
+            InferenceLane lane = request.resolveLane();
+            if (!chatEngine.hasQueueCapacity(lane)) {
+                throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
+            }
+            InferenceTask task = InferenceTask.syncChat(lane, messages, samplerConfig, maxTokens, taskPriority, taskPreemptible);
+            chatEngine.submitTask(task);
+            return task.getSyncFuture().thenApply(text -> ReasoningCleaner.clean(text).trim());
+        } catch (Exception e) {
+            CompletableFuture<String> future = new CompletableFuture<>();
+            future.completeExceptionally(e);
+            return future;
+        }
+    }
+
     private SamplerConfig buildSamplerConfig(ChatRequest request) {
         SamplerConfig config = new SamplerConfig();
         String profile = chatEngine.getModelProfile();
@@ -222,6 +295,14 @@ public class ChatController {
         }
 
         return config;
+    }
+
+    private void validateProgrammaticRequest(ChatRequest request) {
+        if (request == null) throw new IllegalArgumentException("request is required");
+        if (request.messages == null || request.messages.isEmpty()) {
+            throw new IllegalArgumentException("messages is required");
+        }
+        request.resolveLane();
     }
 
     private AugmentedRequest augmentRequest(ChatRequest request) {

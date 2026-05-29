@@ -86,11 +86,16 @@ public class ServerApp {
         ModelRegistry models = new ModelRegistry(engine, embeddingEngine);
         RagService ragService = buildRagService(config, models);
         ChatController chatController = new ChatController(models.getChatEngine(), embeddingEngine, ragService, config.requestTimeoutSeconds);
-        Gson gson = new GsonBuilder().disableHtmlEscaping().create();
-
-        Javalin app = Javalin.create(javalinConfig -> javalinConfig.showJavalinBanner = false).start(config.host, config.port);
+        Javalin app = startHttpServer(config, models, ragService, chatController);
         AtomicBoolean stopped = new AtomicBoolean(false);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdown(app, models, stopped), "server-shutdown-hook"));
+
+        startParentWatchdog();
+    }
+
+    static Javalin startHttpServer(ServerConfig config, ModelRegistry models, RagService ragService, ChatController chatController) {
+        Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+        Javalin app = Javalin.create(javalinConfig -> javalinConfig.showJavalinBanner = false).start(config.host, config.port);
 
         app.post("/v1/chat/completions", ctx -> {
             ChatRequest request = chatController.parseRequestFromContext(ctx);
@@ -181,11 +186,10 @@ public class ServerApp {
         System.out.println("[ServerApp]   GET  /health");
         System.out.println("[ServerApp]   GET  /v1/models");
         System.out.println("[ServerApp]   POST /v1/embeddings");
-
-        startParentWatchdog();
+        return app;
     }
 
-    private static RagService buildRagService(ServerConfig config, ModelRegistry models) throws Exception {
+    static RagService buildRagService(ServerConfig config, ModelRegistry models) throws Exception {
         if (!models.hasEmbeddingEngine()) return null;
         RagConfig ragConfig = new RagConfig(config.staticRagTopK, config.dynamicRagTopK, config.ragChunkSize, config.ragChunkOverlap);
         DynamicRagRetriever dynamicRagRetriever = new DynamicRagRetriever(models.getEmbeddingEngine(), ragConfig);
@@ -367,7 +371,7 @@ public class ServerApp {
         }
     }
 
-    private static String extractFileName(String path) {
+    static String extractFileName(String path) {
         if (path == null || path.isBlank()) return "unknown";
         int lastSlash = path.lastIndexOf('\\');
         if (lastSlash == -1) lastSlash = path.lastIndexOf('/');
