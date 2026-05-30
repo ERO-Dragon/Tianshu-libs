@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-public class LlamaServerService {
+public class JavaLlamaServer {
     static {
         NativeLibraryLoader.ensureLoaded();
     }
@@ -31,7 +31,7 @@ public class LlamaServerService {
     private volatile RagService ragService;
     private volatile ChatController chatController;
 
-    private LlamaServerService(ServerConfig config) {
+    private JavaLlamaServer(ServerConfig config) {
         this.config = copyConfig(config);
     }
 
@@ -381,11 +381,11 @@ public class LlamaServerService {
             return this;
         }
 
-        public LlamaServerService build() {
+        public JavaLlamaServer build() {
             ServerConfig built = copyConfig(config);
             if (!taskContextExplicit) built.taskContext = built.chatContext;
             ServerConfig.validateOrThrow(built);
-            return new LlamaServerService(built);
+            return new JavaLlamaServer(built);
         }
     }
 }
