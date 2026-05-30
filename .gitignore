@@ -98,6 +98,12 @@ tmp/
 # Native DLLs in resources (large binaries, distributed via release)
 /src/main/resources/natives/**/*.dll
 
+# Documentation (distributed via README only)
+USAGE.md
+llmRequire.md
+SELF_CONTAINED_PLAN.md
+RAG_ARCHITECTURE_PLAN.md
+
 # Local LLM model files
 *.gguf
 *.ggml
