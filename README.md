@@ -1,171 +1,124 @@
-# Java Llama Server
+# 天枢 AI 能力库 (Tianshu Libraries)
 
-Java Llama Server 是一个基于 Java 17 的本地大语言模型 HTTP 服务端，底层通过 jjml 调用 llama.cpp / ggml native runtime，HTTP 层使用 Javalin，JSON 处理使用 Gson。
+- 为 Minecraft 天枢模组提供本地 AI 推理能力及ASR，TTS库支持
 
-项目目标是把本地 LLM 推理服务独立成一个 Java 进程，便于 Minecraft Java 模组或其他 Java 应用通过 HTTP/SSE 调用，避免把 native 推理库直接加载进主应用进程。
+天枢 libs 库是一个 Minecraft NeoForge 模组，为天枢 AI 系统提供底层 AI 能力支持。底层通过 JJML 调用 llama.cpp / ggml 实现 LLM 推理，通过 Sherpa-ONNX 实现语音识别，通过 ONNX Runtime 实现通用神经网络加速。
 
-## 功能特性
+## 核心能力
 
-- 提供兼容 OpenAI Chat Completions 风格的 HTTP 接口
-- 支持流式输出
-- 支持 chat / task 双 lane 推理架构
-- 支持长期记忆 RAG 和静态知识 RAG
-- 支持按 world/profile 组织多世界、多角色 RAG 数据
-- 使用 Shadow 打包为可运行 fat jar
-- native 推理库与主应用进程隔离，降低 JNI 崩溃对宿主应用的影响
+| 能力 | 技术栈 | 用途 |
+|------|--------|------|
+| **LLM 推理** | JJML (llama.cpp) | 本地大语言模型对话、任务处理 |
+| **语音识别 (ASR)** | Sherpa-ONNX | 语音转文字 |
+| **向量化** | JJML Embedding | 文本向量提取，用于 RAG |
+| **通用 ML** | ONNX Runtime | 通用神经网络推理加速 |
 
-## 技术栈
+## 技术特性
 
-| 模块 | 技术 |
-| --- | --- |
-| 语言 | Java 17 |
-| HTTP 服务 | Javalin 5.6.3 |
-| JSON | Gson 2.10.1 |
-| 日志 | SLF4J 2.x + slf4j-simple |
-| 构建 | Gradle Kotlin DSL |
-| 打包 | Shadow Jar |
-| LLM JNI 绑定 | jjml / argeo-jjml |
-| Native runtime | llama.cpp / ggml / whisper 相关动态库 |
+- **零外部依赖**：所有 native 库（DLL/SO/DYLIB）打包在 JAR 内部，运行时自动解压加载
+- **嵌入式调用**：模组侧可直接通过 Java API 调用，零网络延迟
+- **多 lane 推理**：支持 chat / task 双通道并发推理
+- **RAG 支持**：长期记忆 RAG + 静态知识 RAG，按 world/profile 组织数据
 
-## 第三方依赖说明
+## 架构
 
-本仓库不包含以下内容：
-
-- argeo-jjml 源码副本
-- 本地编译的 jjml jar
-- llama.cpp / ggml / whisper native 动态库
-- `.gguf` 等模型文件
-- RAG 运行数据和向量索引缓存
-
-这些内容需要使用者自行准备。
-
-这样处理的原因是：
-
-- argeo-jjml 是独立开源项目，本项目只作为使用方依赖它
-- native 动态库是平台相关二进制产物，不适合直接放入源码仓库
-- 模型文件通常体积很大，并且有各自的 license
-- RAG 数据和记忆文件通常属于本地运行数据，不应进入公共仓库
-
-## 本地依赖目录
-
-当前 Gradle 配置期望本地存在 jjml jar：
-
-```text
-libs/
-└── org.argeo.jjml-2.1.2.0006-7f18908.jar
 ```
-
-运行时还需要准备 native 动态库目录，例如 Windows 下：
-
-```text
-libs/
-└── jjml-all/
-    ├── llama.dll
-    ├── ggml.dll
-    ├── ggml-base.dll
-    ├── ggml-cpu-x64.dll
-    ├── Java_org_argeo_jjml_llm.dll
-    ├── Java_org_argeo_jjml_ggml.dll
-    ├── Java_org_argeo_jjml_mtmd.dll
-    ├── Java_org_argeo_jjml_whisper.dll
-    └── whisper.dll
++-------------------------------------------------------------+
+|                   Minecraft 主进程 (JVM)                    |
+|  +-------------+                                            |
+|  |  天枢核心模组  |  <- depends tianshu_libs                |
+|  +-------------+                |                           |
+|                              |                              |
+|                              v                              |
+|                  +---------------------+                   |
+|                  |  TianshuLibsMod     |                   |
+|                  |  (入口类)            |                   |
+|                  +---------------------+                   |
+|                              |                              |
+|                              v                              |
+|                  +---------------------+                   |
+|                  |NativeLibraryLoader  |                   |
+|                  | (自动解压加载 DLL)   |                   |
+|                  +---------------------+                   |
+|           +-------------+-------------+-------------+      |
+|           v             v             v            v       |
+|    +-----------+  +-----------+  +-------------+          |
+|    |  JJML     |  | Sherpa-   |  | ONNX Runtime|          |
+|    | (LLM/Emb) |  |   ONNX    |  |             |          |
+|    +-----------+  +-----------+  +-------------+          |
++-------------------------------------------------------------+
 ```
-
-Linux/macOS 下请放置对应平台的 `.so` 或 `.dylib` 文件，并在启动时通过 `java.library.path` 指向 native 库目录。
 
 ## 构建
-
-确保本地已经安装 JDK 17，并且已经把自行构建或获取的 jjml jar 放到 `libs/` 目录。
-
-Windows：
 
 ```powershell
 .\gradlew.bat build
 ```
 
-Linux/macOS：
+构建产物位于：`build/libs/tianshu-libs-1.0.1.jar`
+
+## 冒烟测试
+
+项目内置了 `NativeLibsSmokeTest` 用于验证所有 native 库正常工作：
 
 ```bash
-./gradlew build
+java -cp "build/libs/tianshu-libs-1.0.1-all.jar" \
+    com.rheinmetal.tianshu.libs.nativelib.NativeLibsSmokeTest
 ```
 
-构建完成后，可运行 jar 位于：
+预期输出：
+```
+==========================================
+   Native Libraries Comprehensive Smoke Test
+==========================================
 
-```text
-build/libs/JavaLlamaServer-v1.0.1-all.jar
+[STEP 0] Native libraries loaded: OK
+
+=== Test Group 1: JJML (LlamaCpp) ===
+[JJML-1] LlamaCppModel.defaultModelParams(): OK
+[JJML-2] LlamaCppContext.defaultContextParams(): OK
+[GROUP 1] JJML: PASSED
+
+=== Test Group 2: Sherpa-ONNX ===
+[Sherpa-1] Class.forName(OfflineRecognizer): OK
+[Sherpa-2] Class.forName(OfflineStream): OK
+[GROUP 2] Sherpa-ONNX: PASSED
+
+=== Test Group 3: ONNX Runtime ===
+[ONNX-1] OrtEnvironment.getEnvironment(): OK
+[ONNX-2] OnnxTensor.createTensor(): OK
+[GROUP 3] ONNX Runtime: PASSED
+
+*** ALL TESTS PASSED ***
 ```
 
-## 运行
+## 依赖声明
 
-基础启动示例：
+在其他模组中依赖天枢 libs：
 
-```powershell
-java -Djava.library.path=./libs/jjml-all -jar build/libs/JavaLlamaServer-v1.0.1-all.jar --model D:/models/model.gguf
+```toml
+[[dependencies.tianshu_libs]]
+    modId="tianshu_libs"
+    versionRange="[1.0.1,)"
+    ordering="AFTER"
+    side="CLIENT"
 ```
 
-Linux/macOS 示例：
+## 打包的 Native 库
 
-```bash
-java -Djava.library.path=./libs/jjml-all -jar build/libs/JavaLlamaServer-v1.0.1-all.jar --model /path/to/model.gguf
-```
+| 库 | 路径 | 说明 |
+|----|------|------|
+| GGML | `natives/windows-x86_64/ggml*.dll` | ggml 核心 + CPU 后端 |
+| Llama.cpp | `natives/windows-x86_64/llama.dll` | LLM 推理引擎 |
+| Whisper | `natives/windows-x86_64/whisper.dll` | 音频编码 |
+| Sherpa-ONNX | `natives/windows-x86_64/sherpa-onnx*.dll` | 语音识别 |
+| ONNX Runtime | 通过 Sherpa 间接加载 | 神经网络加速 |
 
-`--model` 指向本地模型文件路径。模型文件不由本项目下载或管理。
+## 许可证
 
-更多启动参数、RAG 目录结构和接口示例请参考 [USAGE.md](USAGE.md)。
+- 本项目：[MIT](LICENSE)
+- JJML / llama.cpp / ggml：各有其独立许可证
+- Sherpa-ONNX：Apache 2.0
+- ONNX Runtime：MIT
 
-## RAG 运行数据
-
-项目支持按世界和 profile 组织 RAG 数据。典型目录结构如下：
-
-```text
-llm_rag/
-├── world_a/
-│   ├── profiles.json
-│   ├── mod_a/
-│   │   ├── static_rag/
-│   │   └── agents/
-│   │       └── agent_001/
-│   │           └── memory_rag/
-│   │               └── memories.jsonl
-│   └── mod_b/
-│       ├── static_rag/
-│       └── agents/
-│           └── guard_bob/
-│               └── memory_rag/
-│                   └── memories.jsonl
-```
-
-这些文件属于运行数据，默认不建议提交到 Git 仓库。
-
-运行过程中生成的索引缓存包括：
-
-```text
-.javallama-rag-index/
-.javallama-memory-index/
-```
-
-这些目录也属于本地缓存，不应提交。
-
-## 开源仓库边界
-
-本仓库只维护 Java Llama Server 自身源码和构建配置。
-
-不随仓库分发的内容包括：
-
-```text
-argeo-jjml/
-libs/*.jar
-libs/jjml-all/
-*.gguf
-llm_rag/
-.javallama-rag-index/
-.javallama-memory-index/
-```
-
-如果你需要发布开箱即用版本，建议将完整运行包、jjml jar、native 动态库放到 GitHub Release，而不是直接提交到源码仓库。
-
-## License
-
-本项目采用 [MIT License](LICENSE)。
-
-本项目依赖的第三方项目有各自的 license。分发源码、fat jar 或其他二进制包时，请同时遵守 argeo-jjml、llama.cpp、ggml、whisper、Javalin、Gson、SLF4J 等项目的许可要求。
+分发时请同时遵守各第三方项目的许可要求。

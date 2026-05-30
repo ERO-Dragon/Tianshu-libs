@@ -51,9 +51,13 @@ dependencies {
     shade files('libs/org.argeo.jjml-2.1.2.0006-7f18908.jar')
     shade files('libs/sherpa-onnx-v1.13.2.jar')
     shade files('libs/sherpa-onnx-native-lib-win-x64-v1.13.2.jar')
-    shade files('libs/onnxruntime-1.24.3.jar')
-    shade files('libs/sentencepiece4j-1.0.2.jar')
+    shade 'com.microsoft.onnxruntime:onnxruntime:1.24.3'
+    shade 'io.github.eix128:sentencepiece4j:1.0.2'
+    shade 'com.google.protobuf:protobuf-java:4.33.2'
+    shade 'com.belerweb:pinyin4j:2.5.1'
 
+    compileOnly 'org.apache.commons:commons-compress:1.26.0'
+    compileOnly 'it.unimi.dsi:fastutil:8.5.12'
     compileOnly 'io.javalin:javalin:5.6.3'
     compileOnly 'com.google.code.gson:gson:2.10.1'
     compileOnly 'org.slf4j:slf4j-api:2.0.9'
@@ -81,6 +85,30 @@ var generateNativeManifest = tasks.register('generateNativeManifest') {
     }
 }
 
+var generateExternalNativeManifest = tasks.register('generateExternalNativeManifest') {
+    def shadeDeps = configurations.shade
+    def outDir = layout.buildDirectory.dir('generated/resources/META-INF')
+    outputs.dir outDir
+    doLast {
+        outDir.get().asFile.mkdirs()
+        def externalDlls = []
+        shadeDeps.each { dep ->
+            if (dep.name.contains('onnxruntime') || dep.name.contains('sherpa')) {
+                def zip = new java.util.zip.ZipFile(dep)
+                zip.entries().each { entry ->
+                    if (!entry.directory && entry.name.toLowerCase().endsWith('.dll') 
+                        && (entry.name.contains('win-x64') || entry.name.contains('win64'))) {
+                        externalDlls << entry.name
+                    }
+                }
+                zip.close()
+            }
+        }
+        externalDlls = externalDlls.unique().sort()
+        new File(outDir.get().asFile, 'native-libs.txt').text = externalDlls.join('\n')
+    }
+}
+
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
     var replaceProperties = [
             minecraft_version      : minecraft_version,
@@ -104,6 +132,7 @@ neoForge.ideSyncTask generateModMetadata
 
 tasks.named('processResources') {
     dependsOn generateNativeManifest
+    dependsOn generateExternalNativeManifest
 }
 
 shadowJar {
@@ -118,6 +147,7 @@ shadowJar {
     exclude 'META-INF/*.RSA'
     exclude 'META-INF/maven/**'
     exclude 'OSGI-INF/**'
+    exclude 'it/unimi/dsi/fastutil/**'
     exclude 'ai/onnxruntime/native/linux-aarch64/**'
     exclude 'ai/onnxruntime/native/linux-x64/**'
     exclude 'ai/onnxruntime/native/osx-aarch64/**'

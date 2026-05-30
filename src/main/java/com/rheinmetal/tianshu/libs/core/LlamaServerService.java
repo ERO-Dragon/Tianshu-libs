@@ -12,7 +12,6 @@ import com.rheinmetal.tianshu.libs.rag.RagService;
 import com.rheinmetal.tianshu.libs.web.ChatController;
 import com.rheinmetal.tianshu.libs.web.ChatController.ChatMessage;
 import com.rheinmetal.tianshu.libs.web.ChatController.ChatRequest;
-import io.javalin.Javalin;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +30,6 @@ public class LlamaServerService {
     private volatile ModelRegistry models;
     private volatile RagService ragService;
     private volatile ChatController chatController;
-    private volatile Javalin app;
 
     private LlamaServerService(ServerConfig config) {
         this.config = copyConfig(config);
@@ -105,22 +103,7 @@ public class LlamaServerService {
         }
     }
 
-    public synchronized void startWithHttp(int port) throws Exception {
-        config.port = port;
-        start();
-        if (app != null) return;
-        this.app = ServerApp.startHttpServer(config, requireModels(), ragService, requireChatController());
-    }
-
     public synchronized void shutdown() {
-        Javalin currentApp = this.app;
-        this.app = null;
-        if (currentApp != null) {
-            try {
-                currentApp.stop();
-            } catch (Exception ignored) {
-            }
-        }
         ModelRegistry currentModels = this.models;
         this.models = null;
         this.ragService = null;

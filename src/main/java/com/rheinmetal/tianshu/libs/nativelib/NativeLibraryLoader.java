@@ -1,6 +1,8 @@
 package com.rheinmetal.tianshu.libs.nativelib;
 
 import org.argeo.jjml.llm.LlamaCppNative;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -15,15 +17,18 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class NativeLibraryLoader {
+    private static final Logger LOGGER = LoggerFactory.getLogger(NativeLibraryLoader.class);
+
     private static final String RESOURCE_DIR = "natives/windows-x86_64";
-    private static final String MANIFEST_RESOURCE = RESOURCE_DIR + "/native-libs.txt";
+    private static final String JJML_MANIFEST = RESOURCE_DIR + "/native-libs.txt";
+    private static final String EXTERNAL_MANIFEST = "META-INF/native-libs.txt";
     private static final String TEMP_DIR_NAME = "javallamaserver-natives";
     private static final Duration STALE_DIR_TTL = Duration.ofDays(7);
+
     private static final AtomicBoolean LOADED = new AtomicBoolean(false);
     private static final Object LOCK = new Object();
     private static volatile Path loadedDirectory;
@@ -36,27 +41,55 @@ public final class NativeLibraryLoader {
         synchronized (LOCK) {
             if (LOADED.get()) return;
             try {
-                preloadOnnxruntime();
                 Path nativeDir = prepareNativeDirectory();
-                configureNativePaths(nativeDir);
+                loadAllNativeLibraries(nativeDir);
                 LlamaCppNative.ensureLibrariesLoaded();
                 loadedDirectory = nativeDir;
                 LOADED.set(true);
-                System.out.println("[NativeLibraryLoader] Loaded native libraries from: " + nativeDir);
+                LOGGER.info("All native libraries loaded successfully");
+                printLoadReport();
             } catch (Exception e) {
                 throw new IllegalStateException("Failed to load native libraries", e);
             }
         }
     }
 
-    private static void preloadOnnxruntime() {
+    public static void printLoadReport() {
+        LOGGER.info("=== Native Library Load Report ===");
+        LOGGER.info("[jjml] LlamaCpp native: {}", verifyJjml());
+        LOGGER.info("[sherpa-onnx] Native: {}", verifySherpaOnnx());
+        LOGGER.info("[onnxruntime] Java API: {}", verifyOnnxruntime());
+        LOGGER.info("=================================");
+    }
+
+    private static String verifyJjml() {
         try {
-            Class<?> sherpaClass = Class.forName("com.k2fsa.sherpa.onnx.OnnxModel");
-            System.out.println("[NativeLibraryLoader] Preloaded sherpa-onnx native libraries (extended onnxruntime.dll)");
-        } catch (ClassNotFoundException e) {
-            System.out.println("[NativeLibraryLoader] sherpa-onnx not found on classpath, skipping onnxruntime preload");
+            LlamaCppNative.ensureLibrariesLoaded();
+            return "OK";
         } catch (UnsatisfiedLinkError e) {
-            System.out.println("[NativeLibraryLoader] sherpa-onnx native preload failed (non-fatal): " + e.getMessage());
+            return "FAILED - " + e.getMessage();
+        }
+    }
+
+    private static String verifySherpaOnnx() {
+        try {
+            Class.forName("com.k2fsa.sherpa.onnx.OfflineRecognizer");
+            return "OK";
+        } catch (UnsatisfiedLinkError e) {
+            return "FAILED (DLL not loaded) - " + e.getMessage();
+        } catch (ClassNotFoundException e) {
+            return "NOT FOUND";
+        }
+    }
+
+    private static String verifyOnnxruntime() {
+        try {
+            Class.forName("ai.onnxruntime.OrtEnvironment");
+            return "OK";
+        } catch (UnsatisfiedLinkError e) {
+            return "FAILED - " + e.getMessage();
+        } catch (ClassNotFoundException e) {
+            return "NOT FOUND";
         }
     }
 
@@ -65,61 +98,128 @@ public final class NativeLibraryLoader {
     }
 
     private static Path prepareNativeDirectory() throws Exception {
-        List<String> libraries = readManifest();
-        String fingerprint = computeFingerprint(libraries);
+        List<NativeLib> allLibs = collectAllNativeLibs();
+        List<NativeLib> loadableLibs = filterLoadableLibs(allLibs);
+
+        if (loadableLibs.isEmpty()) {
+            throw new IllegalStateException("No native libraries found to load");
+        }
+
+        String fingerprint = computeFingerprint(loadableLibs);
         Path baseDir = Path.of(System.getProperty("java.io.tmpdir"), TEMP_DIR_NAME);
         Files.createDirectories(baseDir);
         cleanupStaleDirectories(baseDir);
 
         Path targetDir = baseDir.resolve(fingerprint);
         Path fingerprintFile = targetDir.resolve(".fingerprint");
+
         if (Files.isDirectory(targetDir)
                 && Files.isRegularFile(fingerprintFile)
                 && fingerprint.equals(Files.readString(fingerprintFile).trim())
-                && hasAllLibraries(targetDir, libraries)) {
+                && hasAllLibraries(targetDir, loadableLibs)) {
+            LOGGER.debug("Using cached native directory: {}", targetDir);
             return targetDir;
         }
 
         deleteRecursively(targetDir);
         Files.createDirectories(targetDir);
-        for (String library : libraries) {
-            extractResource(library, targetDir.resolve(library));
+
+        LOGGER.info("Extracting {} native libraries to: {}", loadableLibs.size(), targetDir);
+        for (NativeLib lib : allLibs) {
+            Path target = targetDir.resolve(lib.targetName);
+            extractResource(lib.resourcePath, target);
         }
+
         Files.writeString(fingerprintFile, fingerprint, StandardCharsets.UTF_8);
         return targetDir;
     }
 
-    private static List<String> readManifest() throws IOException {
-        try (InputStream in = openResource(MANIFEST_RESOURCE)) {
+    private static List<NativeLib> filterLoadableLibs(List<NativeLib> libs) {
+        List<NativeLib> loadable = new ArrayList<>();
+        for (NativeLib lib : libs) {
+            if (openResource(lib.resourcePath) != null) {
+                loadable.add(lib);
+            }
+        }
+        return loadable;
+    }
+
+    private static List<NativeLib> collectAllNativeLibs() throws IOException {
+        List<NativeLib> result = new ArrayList<>();
+
+        result.addAll(scanJjmlManifest());
+        result.addAll(scanExternalManifest());
+
+        return result;
+    }
+
+    private static List<NativeLib> scanExternalManifest() {
+        List<NativeLib> libs = new ArrayList<>();
+        try (InputStream in = openResource(EXTERNAL_MANIFEST)) {
+            if (in == null) return libs;
             String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            List<String> libraries = new ArrayList<>();
             for (String line : content.split("\\R")) {
                 String name = line.trim();
                 if (name.isEmpty() || name.startsWith("#")) continue;
-                validateLibraryName(name);
-                libraries.add(name);
+                if (name.contains("..") || !name.endsWith(".dll")) continue;
+                String fileName = name.substring(name.lastIndexOf('/') + 1);
+                LibSource source = detectLibSource(name);
+                libs.add(new NativeLib(name, fileName, source));
             }
-            if (libraries.isEmpty()) {
-                throw new IOException("Native library manifest is empty: " + MANIFEST_RESOURCE);
-            }
-            return libraries;
+        } catch (IOException e) {
+            LOGGER.debug("External native manifest not found");
         }
+        return libs;
     }
 
-    private static String computeFingerprint(List<String> libraries) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        for (String library : libraries) {
-            digest.update(library.getBytes(StandardCharsets.UTF_8));
-            digest.update((byte) 0);
-            try (InputStream in = openResource(resourcePath(library))) {
-                updateDigest(digest, in);
+    private static List<NativeLib> scanJjmlManifest() {
+        List<NativeLib> libs = new ArrayList<>();
+        try (InputStream in = openResource(JJML_MANIFEST)) {
+            if (in == null) return libs;
+            String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            for (String line : content.split("\\R")) {
+                String name = line.trim();
+                if (name.isEmpty() || name.startsWith("#")) continue;
+                libs.add(new NativeLib(RESOURCE_DIR + "/" + name, name, LibSource.JJML));
             }
-            digest.update((byte) 0xff);
+        } catch (IOException e) {
+            LOGGER.debug("JJML native manifest not found");
         }
-        return HexFormat.of().formatHex(digest.digest());
+        return libs;
     }
 
-    private static void configureNativePaths(Path nativeDir) {
+    private static LibSource detectLibSource(String resourcePath) {
+        String lower = resourcePath.toLowerCase();
+        if (lower.contains("onnxruntime") && lower.contains("jni")) return LibSource.ORT_JNI;
+        if (lower.contains("onnxruntime") && lower.contains("providers")) return LibSource.ORT_PROVIDERS;
+        if (lower.contains("sherpa") && lower.contains("jni")) return LibSource.SHERPA_JNI;
+        if (lower.contains("sherpa") && lower.contains("onnxruntime")) return LibSource.SHERPA_ORT;
+        return LibSource.OTHER;
+    }
+
+    private static void loadAllNativeLibraries(Path nativeDir) throws IOException {
+        System.setProperty("onnxruntime.native.path", nativeDir.toAbsolutePath().toString());
+
+        List<NativeLib> allLibs = collectAllNativeLibs();
+        List<NativeLib> loadableLibs = filterLoadableLibs(allLibs);
+
+        loadableLibs.sort(Comparator.comparingInt(NativeLibraryLoader::computeLoadPriority));
+
+        LOGGER.info("Loading {} native libraries", loadableLibs.size());
+        for (NativeLib lib : loadableLibs) {
+            Path libPath = nativeDir.resolve(lib.targetName);
+            if (Files.isRegularFile(libPath)) {
+                LOGGER.debug("Loading: {} ({})", lib.targetName, lib.source);
+                System.load(libPath.toAbsolutePath().toString());
+            } else {
+                LOGGER.warn("Native library not found: {}", libPath);
+            }
+        }
+
+        configureJjmlPaths(nativeDir);
+    }
+
+    private static void configureJjmlPaths(Path nativeDir) {
         Path ggml = requiredLibrary(nativeDir, "ggml.dll");
         Path llama = requiredLibrary(nativeDir, "llama.dll");
         Path jjmlGgml = requiredLibrary(nativeDir, "Java_org_argeo_jjml_ggml.dll");
@@ -135,19 +235,50 @@ public final class NativeLibraryLoader {
         System.setProperty(LlamaCppNative.SYSTEM_PROPERTY_LIBPATH_JJML_LLM, jjmlLlm.toAbsolutePath().toString());
     }
 
-    private static void extractResource(String library, Path target) throws IOException {
+    private static int computeLoadPriority(NativeLib lib) {
+        String resource = lib.resourcePath.toLowerCase();
+        if (resource.contains("sherpa")) return 1;
+        if (resource.contains("onnxruntime")) return 15;
+        String name = lib.targetName.toLowerCase();
+        if (name.startsWith("ggml")) return 25;
+        if (name.startsWith("llama") || name.startsWith("whisper")) return 25;
+        if (name.startsWith("java_")) return 30;
+        return 100;
+    }
+
+    private static String computeFingerprint(List<NativeLib> libraries) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        for (NativeLib lib : libraries) {
+            digest.update(lib.resourcePath.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            try (InputStream in = openResource(lib.resourcePath)) {
+                if (in != null) {
+                    updateDigest(digest, in);
+                }
+            }
+            digest.update((byte) 0xff);
+        }
+        return toHex(digest.digest());
+    }
+
+    private static void extractResource(String resource, Path target) throws IOException {
+        InputStream in = openResource(resource);
+        if (in == null) {
+            LOGGER.warn("Native resource not found, skipping: {}", resource);
+            return;
+        }
         Files.createDirectories(target.getParent());
         Path tempFile = target.resolveSibling(target.getFileName() + ".tmp");
-        try (InputStream in = openResource(resourcePath(library));
+        try (InputStream input = in;
              OutputStream out = Files.newOutputStream(tempFile)) {
-            in.transferTo(out);
+            input.transferTo(out);
         }
         Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    private static boolean hasAllLibraries(Path targetDir, List<String> libraries) {
-        for (String library : libraries) {
-            if (!Files.isRegularFile(targetDir.resolve(library))) return false;
+    private static boolean hasAllLibraries(Path targetDir, List<NativeLib> libraries) {
+        for (NativeLib lib : libraries) {
+            if (!Files.isRegularFile(targetDir.resolve(lib.targetName))) return false;
         }
         return true;
     }
@@ -188,29 +319,45 @@ public final class NativeLibraryLoader {
         return path;
     }
 
-    private static InputStream openResource(String path) throws IOException {
+    private static InputStream openResource(String path) {
         InputStream in = NativeLibraryLoader.class.getClassLoader().getResourceAsStream(path);
-        if (in == null) {
-            throw new IOException("Native resource not found in classpath: " + path);
-        }
-        return new BufferedInputStream(in);
+        return in != null ? new BufferedInputStream(in) : null;
     }
 
-    private static String resourcePath(String library) {
-        return RESOURCE_DIR + "/" + library;
-    }
-
-    private static void validateLibraryName(String name) throws IOException {
-        if (!name.endsWith(".dll") || name.contains("/") || name.contains("\\") || name.contains("..")) {
-            throw new IOException("Invalid library entry in manifest: " + name);
-        }
-    }
-
-    private static void updateDigest(MessageDigest digest, InputStream in) throws IOException, NoSuchAlgorithmException {
+    private static void updateDigest(MessageDigest digest, InputStream in) throws IOException {
         byte[] buffer = new byte[8192];
         int read;
         while ((read = in.read(buffer)) != -1) {
             digest.update(buffer, 0, read);
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
+    private enum LibSource {
+        JJML,
+        ORT_JNI,
+        ORT_PROVIDERS,
+        SHERPA_JNI,
+        SHERPA_ORT,
+        OTHER
+    }
+
+    private static class NativeLib {
+        final String resourcePath;
+        final String targetName;
+        final LibSource source;
+
+        NativeLib(String resourcePath, String targetName, LibSource source) {
+            this.resourcePath = resourcePath;
+            this.targetName = targetName;
+            this.source = source;
         }
     }
 }
