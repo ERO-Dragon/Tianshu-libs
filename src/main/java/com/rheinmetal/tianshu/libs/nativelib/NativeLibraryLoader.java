@@ -1,6 +1,5 @@
 package com.rheinmetal.tianshu.libs.nativelib;
 
-import org.argeo.jjml.llm.LlamaCppNative;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +42,7 @@ public final class NativeLibraryLoader {
             try {
                 Path nativeDir = prepareNativeDirectory();
                 loadAllNativeLibraries(nativeDir);
-                LlamaCppNative.ensureLibrariesLoaded();
+                configureJjmlPaths(nativeDir);
                 loadedDirectory = nativeDir;
                 LOADED.set(true);
                 LOGGER.info("All native libraries loaded successfully");
@@ -64,9 +63,13 @@ public final class NativeLibraryLoader {
 
     private static String verifyJjml() {
         try {
-            LlamaCppNative.ensureLibrariesLoaded();
-            return "OK";
-        } catch (UnsatisfiedLinkError e) {
+            String ggmlPath = System.getProperty("org.argeo.jjml.llm.ggml.libpath");
+            String llamaPath = System.getProperty("org.argeo.jjml.llm.llama.libpath");
+            if (ggmlPath != null && llamaPath != null && Files.isRegularFile(Path.of(ggmlPath)) && Files.isRegularFile(Path.of(llamaPath))) {
+                return "OK";
+            }
+            return "FAILED - paths not configured";
+        } catch (Exception e) {
             return "FAILED - " + e.getMessage();
         }
     }
@@ -215,8 +218,6 @@ public final class NativeLibraryLoader {
                 LOGGER.warn("Native library not found: {}", libPath);
             }
         }
-
-        configureJjmlPaths(nativeDir);
     }
 
     private static void configureJjmlPaths(Path nativeDir) {
@@ -225,14 +226,10 @@ public final class NativeLibraryLoader {
         Path jjmlGgml = requiredLibrary(nativeDir, "Java_org_argeo_jjml_ggml.dll");
         Path jjmlLlm = requiredLibrary(nativeDir, "Java_org_argeo_jjml_llm.dll");
 
-        LlamaCppNative.setGgmlLibraryPath(ggml);
-        LlamaCppNative.setLlamaLibraryPath(llama);
-        LlamaCppNative.setJjmlLlamaLibraryPath(jjmlLlm);
-
-        System.setProperty(LlamaCppNative.SYSTEM_PROPERTY_LIBPATH_GGML, ggml.toAbsolutePath().toString());
-        System.setProperty(LlamaCppNative.SYSTEM_PROPERTY_LIBPATH_LLAMACPP, llama.toAbsolutePath().toString());
-        System.setProperty(LlamaCppNative.SYSTEM_PROPERTY_LIBPATH_JJML_GGML, jjmlGgml.toAbsolutePath().toString());
-        System.setProperty(LlamaCppNative.SYSTEM_PROPERTY_LIBPATH_JJML_LLM, jjmlLlm.toAbsolutePath().toString());
+        System.setProperty("org.argeo.jjml.llm.ggml.libpath", ggml.toAbsolutePath().toString());
+        System.setProperty("org.argeo.jjml.llm.llama.libpath", llama.toAbsolutePath().toString());
+        System.setProperty("org.argeo.jjml.llm.jjml.ggml.libpath", jjmlGgml.toAbsolutePath().toString());
+        System.setProperty("org.argeo.jjml.llm.jjml.llm.libpath", jjmlLlm.toAbsolutePath().toString());
     }
 
     private static int computeLoadPriority(NativeLib lib) {

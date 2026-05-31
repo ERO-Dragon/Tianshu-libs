@@ -45,10 +45,15 @@ neoForge {
 configurations {
     shade
     implementation.extendsFrom shade
+    jarJar
+    implementation.extendsFrom jarJar
 }
 
 dependencies {
-    shade files('libs/org.argeo.jjml-2.1.2.0006-7f18908.jar')
+    // JJML 使用 JarJar 嵌套打包（满足 LGPL 要求）
+    jarJar files('libs/org.argeo.jjml-2.1.2.0006-7f18908.jar')
+
+    // 其他依赖使用 Shadow 打包  
     shade files('libs/sherpa-onnx-v1.13.2.jar')
     shade files('libs/sherpa-onnx-native-lib-win-x64-v1.13.2.jar')
     shade 'com.microsoft.onnxruntime:onnxruntime:1.24.3'
@@ -141,6 +146,11 @@ shadowJar {
     mergeServiceFiles()
 
     dependsOn generateNativeManifest
+    dependsOn tasks.named('jarJar')
+
+    into('META-INF/jarjar') {
+        from('build/generated/jarJar/META-INF/jarjar')
+    }
 
     exclude 'META-INF/*.SF'
     exclude 'META-INF/*.DSA'
@@ -155,10 +165,6 @@ shadowJar {
 }
 
 jar {
-    enabled = false
-}
-
-tasks.named('jarJar') {
     enabled = false
 }
 
