@@ -2,7 +2,6 @@ package com.rheinmetal.tianshu.libs.core;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
 import com.rheinmetal.tianshu.libs.llm.EmbeddingEngine;
 import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.InferenceTask;
@@ -10,14 +9,6 @@ import com.rheinmetal.tianshu.libs.llm.LaneConfig;
 import com.rheinmetal.tianshu.libs.llm.LaneMetrics;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
 import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
-import com.rheinmetal.tianshu.libs.rag.DynamicRagRetriever;
-import com.rheinmetal.tianshu.libs.rag.MemoryRagIndex;
-import com.rheinmetal.tianshu.libs.rag.RagConfig;
-import com.rheinmetal.tianshu.libs.rag.RagProfileRegistry;
-import com.rheinmetal.tianshu.libs.rag.RagService;
-import com.rheinmetal.tianshu.libs.rag.RagSourceCache;
-import com.rheinmetal.tianshu.libs.rag.StaticRagIndex;
-import com.rheinmetal.tianshu.libs.rag.WorldStaticRagRegistry;
 import com.rheinmetal.tianshu.libs.web.ChatController;
 import com.rheinmetal.tianshu.libs.web.ChatController.ChatRequest;
 
@@ -85,16 +76,15 @@ public class ServerApp {
         }
 
         ModelRegistry models = new ModelRegistry(engine, embeddingEngine);
-        RagService ragService = buildRagService(config, models);
-        ChatController chatController = new ChatController(models.getChatEngine(), embeddingEngine, ragService, config.requestTimeoutSeconds);
-        Javalin app = startHttpServer(config, models, ragService, chatController);
+        ChatController chatController = new ChatController(models.getChatEngine(), embeddingEngine, config.requestTimeoutSeconds);
+        Javalin app = startHttpServer(config, models, chatController);
         AtomicBoolean stopped = new AtomicBoolean(false);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdown(app, models, stopped), "server-shutdown-hook"));
 
         startParentWatchdog();
     }
 
-    static Javalin startHttpServer(ServerConfig config, ModelRegistry models, RagService ragService, ChatController chatController) {
+    static Javalin startHttpServer(ServerConfig config, ModelRegistry models, ChatController chatController) {
         Gson gson = new GsonBuilder().disableHtmlEscaping().create();
         Javalin app = Javalin.create(javalinConfig -> javalinConfig.showJavalinBanner = false).start(config.host, config.port);
 
@@ -150,8 +140,6 @@ public class ServerApp {
             HealthResponse response = new HealthResponse(
                     models.isReady() ? "ready" : "loading",
                     models.hasEmbeddingEngine(),
-                    ragService == null ? 0 : ragService.getStaticChunkCount(),
-                    ragService == null ? 0 : ragService.getMemoryCount(),
                     laneMetrics
             );
             ctx.status(models.isReady() ? 200 : 503).contentType("application/json").result(gson.toJson(response));
@@ -188,28 +176,6 @@ public class ServerApp {
         System.out.println("[ServerApp]   GET  /v1/models");
         System.out.println("[ServerApp]   POST /v1/embeddings");
         return app;
-    }
-
-    static RagService buildRagService(ServerConfig config, ModelRegistry models) throws Exception {
-        if (!models.hasEmbeddingEngine()) return null;
-        RagConfig ragConfig = new RagConfig(config.staticRagTopK, config.dynamicRagTopK, config.ragChunkSize, config.ragChunkOverlap);
-        DynamicRagRetriever dynamicRagRetriever = new DynamicRagRetriever(models.getEmbeddingEngine(), ragConfig);
-        if (config.ragRootPath != null && !config.ragRootPath.isBlank()) {
-            RagProfileRegistry profileRegistry = new RagProfileRegistry(config.ragRootPath, config.ragProfileRefreshIntervalMillis);
-            RagSourceCache sourceCache = new RagSourceCache(models.getEmbeddingEngine(), ragConfig, config.memoryRagRefreshIntervalMillis);
-            WorldStaticRagRegistry worldStaticRegistry = new WorldStaticRagRegistry(config.worldStaticRagScanIntervalMillis);
-            return new RagService(dynamicRagRetriever, profileRegistry, sourceCache, worldStaticRegistry, ragConfig);
-        }
-        StaticRagIndex staticRagIndex = new StaticRagIndex(models.getEmbeddingEngine(), ragConfig);
-        if (config.staticRagPath != null && !config.staticRagPath.isBlank()) {
-            staticRagIndex.load(config.staticRagPath);
-        }
-        MemoryRagIndex memoryRagIndex = null;
-        if (config.memoryRagPath != null && !config.memoryRagPath.isBlank()) {
-            memoryRagIndex = new MemoryRagIndex(models.getEmbeddingEngine(), config.memoryRagPath, config.memoryRagRefreshIntervalMillis);
-            memoryRagIndex.load();
-        }
-        return new RagService(staticRagIndex, dynamicRagRetriever, memoryRagIndex, ragConfig);
     }
 
     private static void shutdown(Javalin app, ModelRegistry models, AtomicBoolean stopped) {
@@ -252,22 +218,6 @@ public class ServerApp {
             System.out.println("[ServerApp]   Embedding Threads: " + config.embeddingThreads);
             System.out.println("[ServerApp]   Embedding GPU Layers: " + config.embeddingGpuLayers);
             System.out.println("[ServerApp]   Embedding Alias: " + config.embeddingAlias);
-        }
-        if (config.staticRagPath != null && !config.staticRagPath.isBlank()) {
-            System.out.println("[ServerApp]   Static RAG Path: " + config.staticRagPath);
-            System.out.println("[ServerApp]   Static RAG TopK: " + config.staticRagTopK);
-            System.out.println("[ServerApp]   Dynamic RAG TopK: " + config.dynamicRagTopK);
-            System.out.println("[ServerApp]   RAG Chunk Size: " + config.ragChunkSize);
-            System.out.println("[ServerApp]   RAG Chunk Overlap: " + config.ragChunkOverlap);
-        }
-        if (config.memoryRagPath != null && !config.memoryRagPath.isBlank()) {
-            System.out.println("[ServerApp]   Memory RAG Path: " + config.memoryRagPath);
-            System.out.println("[ServerApp]   Memory RAG Refresh Interval Millis: " + config.memoryRagRefreshIntervalMillis);
-        }
-        if (config.ragRootPath != null && !config.ragRootPath.isBlank()) {
-            System.out.println("[ServerApp]   RAG Root Path: " + config.ragRootPath);
-            System.out.println("[ServerApp]   RAG Profile Refresh Interval Millis: " + config.ragProfileRefreshIntervalMillis);
-            System.out.println("[ServerApp]   World Static RAG Scan Interval Millis: " + config.worldStaticRagScanIntervalMillis);
         }
     }
 
@@ -318,8 +268,6 @@ public class ServerApp {
     public static class HealthResponse {
         public String status;
         public boolean embedding;
-        public int static_rag_chunks;
-        public int memory_rag_memories;
         public int queue_size;
         public int max_queue_size;
         public int chat_queue_size;
@@ -329,11 +277,9 @@ public class ServerApp {
         public String current_lane;
         public boolean task_suspended;
 
-        public HealthResponse(String status, boolean embedding, int staticRagChunks, int memoryRagMemories, LaneMetrics laneMetrics) {
+        public HealthResponse(String status, boolean embedding, LaneMetrics laneMetrics) {
             this.status = status;
             this.embedding = embedding;
-            this.static_rag_chunks = staticRagChunks;
-            this.memory_rag_memories = memoryRagMemories;
             this.queue_size = laneMetrics.getChatQueueSize();
             this.max_queue_size = laneMetrics.getChatMaxQueueSize();
             this.chat_queue_size = laneMetrics.getChatQueueSize();
@@ -408,69 +354,24 @@ public class ServerApp {
                     conn.setRequestMethod("POST");
                     conn.setDoOutput(true);
                     conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Accept", "text/event-stream");
-                    conn.setConnectTimeout(5000);
-                    conn.setReadTimeout(300000);
+                    conn.getOutputStream().write(jsonBody.getBytes("UTF-8"));
 
-                    try (var os = conn.getOutputStream()) {
-                        os.write(jsonBody.getBytes("UTF-8"));
-                        os.flush();
-                    }
-
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode != 200) {
-                        System.err.println("[Console] HTTP " + responseCode);
-                        try (var errStream = conn.getErrorStream()) {
-                            if (errStream != null) {
-                                byte[] errBytes = errStream.readAllBytes();
-                                System.err.println("[Console] " + new String(errBytes, "UTF-8"));
-                            }
-                        }
-                        continue;
-                    }
-
-                    System.out.print("[Assistant] > ");
-                    System.out.flush();
-
-                    StringBuilder lineBuf = new StringBuilder();
-                    try (var is = conn.getInputStream();
-                         var isr = new java.io.InputStreamReader(is, "UTF-8")) {
-                        int ch;
-                        while ((ch = isr.read()) != -1) {
-                            if (ch == '\n') {
-                                String line = lineBuf.toString().trim();
-                                lineBuf.setLength(0);
-                                if (line.isEmpty()) continue;
-                                if (line.startsWith("data: ")) {
-                                    String data = line.substring(6).trim();
-                                    if (data.equals("[DONE]")) {
-                                        System.out.println();
-                                        break;
-                                    }
-                                    try {
-                                        JsonObject chunk = gson.fromJson(data, JsonObject.class);
-                                        if (chunk != null && chunk.has("choices")) {
-                                            var choicesArr = chunk.getAsJsonArray("choices");
-                                            if (choicesArr != null && choicesArr.size() > 0) {
-                                                JsonObject choice = choicesArr.get(0).getAsJsonObject();
-                                                if (choice.has("delta")) {
-                                                    JsonObject delta = choice.getAsJsonObject("delta");
-                                                    if (delta != null && delta.has("content") && !delta.get("content").isJsonNull()) {
-                                                        System.out.print(delta.get("content").getAsString());
-                                                        System.out.flush();
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } catch (Exception ignore) {
-                                    }
+                    java.io.BufferedReader reader2 = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()));
+                    String line;
+                    while ((line = reader2.readLine()) != null) {
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6);
+                            if ("[DONE]".equals(data)) break;
+                            try {
+                                StreamChunkResponse chunk = gson.fromJson(data, StreamChunkResponse.class);
+                                if (chunk != null && chunk.choices != null && !chunk.choices.isEmpty() && chunk.choices.get(0).delta != null) {
+                                    System.out.print(chunk.choices.get(0).delta.content);
                                 }
-                            } else {
-                                lineBuf.append((char) ch);
+                            } catch (Exception ignored) {
                             }
                         }
                     }
-                    conn.disconnect();
+                    System.out.println("\n");
                 } catch (Exception e) {
                     System.err.println("[Console] Error: " + e.getMessage());
                 }
@@ -480,41 +381,45 @@ public class ServerApp {
         consoleThread.start();
     }
 
+    private static class StreamChunkResponse {
+        public List<Choice> choices;
+
+        private static class Choice {
+            public Delta delta;
+        }
+
+        private static class Delta {
+            public String content;
+        }
+    }
+
     private static void printUsage() {
-        System.out.println("Usage: java -jar LlamaServer-Fat-all.jar [options]");
-        System.out.println("  -m,  --model <path>                 GGUF chat model path (required)");
-        System.out.println("  -c,  --context <n>                  Context size (default: 4096)");
-        System.out.println("  -t,  --threads <n>                  Thread count (default: CPU cores)");
-        System.out.println("       --host <addr>                  Bind host (default: 127.0.0.1 only)");
-        System.out.println("       --port <n>                     Bind port (default: 8080)");
-        System.out.println("       --alias <name>                 Model alias (default: model file name)");
-        System.out.println("       --model-profile <name>         Override model adapter profile (default: auto)");
-        System.out.println("       --embedding-model <path>       GGUF embedding model path");
-        System.out.println("       --embedding-context <n>        Embedding context size (default: 4096)");
-        System.out.println("       --embedding-threads <n>        Embedding thread count (default: CPU cores)");
-        System.out.println("       --embedding-gpu-layers <n>     Embedding GPU layers (default: 999)");
-        System.out.println("       --embedding-alias <name>       Embedding model alias");
-        System.out.println("       --static-rag-path <path>       Static RAG file or directory path");
-        System.out.println("       --memory-rag-path <path>       Memory RAG directory path");
-        System.out.println("       --rag-root-path <path>         Multi-world profile RAG root path");
-        System.out.println("       --rag-profile-refresh-interval-ms <n> Profile config refresh interval in milliseconds (default: 1000)");
-        System.out.println("       --world-static-rag-scan-interval-ms <n> World static RAG discovery interval in milliseconds (default: 5000)");
-        System.out.println("       --memory-rag-refresh-interval-ms <n> Memory RAG refresh interval in milliseconds (default: 1000)");
-        System.out.println("       --static-rag-top-k <n>         Static RAG top-k (default: 4)");
-        System.out.println("       --dynamic-rag-top-k <n>        Dynamic RAG top-k (default: 4)");
-        System.out.println("       --rag-chunk-size <n>           Static RAG chunk size (default: 900)");
-        System.out.println("       --rag-chunk-overlap <n>        Static RAG chunk overlap (default: 120)");
-        System.out.println("       --chat-context <n>             Chat lane context size (default: --context)");
-        System.out.println("       --chat-threads <n>             Chat lane thread count (default: --threads)");
-        System.out.println("       --chat-max-queue-size <n>      Chat lane queue capacity (default: --max-queue-size)");
-        System.out.println("       --task-context <n>             Task lane context size (default: --context)");
-        System.out.println("       --task-threads <n>             Task lane thread count (default: min(2, CPU cores))");
-        System.out.println("       --task-max-queue-size <n>      Task lane queue capacity (default: 1)");
-        System.out.println("       --task-suspend-on-chat <bool>  Suspend task lane when chat is pending (default: true)");
-        System.out.println("       --cache-type-k <type>          KV cache K type, supported: f16, q8_0");
-        System.out.println("       --cache-type-v <type>          KV cache V type, supported: f16, q8_0");
-        System.out.println("       --max-queue-size <n>           Legacy chat lane queue capacity (default: 4)");
-        System.out.println("       --request-timeout-seconds <n>  Non-stream request timeout (default: 300)");
-        System.out.println("  -ngl, --n-gpu-layers <n>            Chat model GPU layers (default: 999)");
+        System.out.println("Usage: java -jar ... [options]");
+        System.out.println("Options:");
+        System.out.println("  -m, --model <path>              Path to the model file (required)");
+        System.out.println("  -c, --context <n>               Context size (default: " + ServerConfig.DEFAULT_CONTEXT_SIZE + ")");
+        System.out.println("  -t, --threads <n>               Number of threads (default: " + ServerConfig.DEFAULT_THREAD_COUNT + ")");
+        System.out.println("  --host <ip>                     Host to bind to (default: 127.0.0.1)");
+        System.out.println("  --port <n>                      Port to bind to (default: " + ServerConfig.DEFAULT_PORT + ")");
+        System.out.println("  --alias <name>                  Model alias");
+        System.out.println("  --model-profile <profile>       Model profile (auto/qwen3/qwen3.5/deepseek-r1)");
+        System.out.println("  --embedding-model <path>        Path to embedding model");
+        System.out.println("  --embedding-context <n>         Embedding context size");
+        System.out.println("  --embedding-threads <n>         Embedding threads");
+        System.out.println("  --embedding-gpu-layers <n>      Embedding GPU layers");
+        System.out.println("  --embedding-alias <name>        Embedding model alias");
+        System.out.println("  --max-queue-size <n>            Max queue size (default: " + ServerConfig.DEFAULT_MAX_QUEUE_SIZE + ")");
+        System.out.println("  --chat-context <n>              Chat context size");
+        System.out.println("  --chat-threads <n>              Chat threads");
+        System.out.println("  --chat-max-queue-size <n>       Chat max queue size");
+        System.out.println("  --task-context <n>              Task context size");
+        System.out.println("  --task-threads <n>              Task threads");
+        System.out.println("  --task-max-queue-size <n>       Task max queue size");
+        System.out.println("  --task-suspend-on-chat <bool>   Suspend task on chat (default: true)");
+        System.out.println("  --cache-type-k <type>           KV cache type K");
+        System.out.println("  --cache-type-v <type>           KV cache type V");
+        System.out.println("  --request-timeout-seconds <n>  Request timeout (default: " + ServerConfig.DEFAULT_REQUEST_TIMEOUT_SECONDS + ")");
+        System.out.println("  -ngl, --n-gpu-layers <n>        Number of GPU layers");
+        System.out.println("  -h, --help                      Show this help message");
     }
 }

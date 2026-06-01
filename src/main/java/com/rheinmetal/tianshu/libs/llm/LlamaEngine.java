@@ -37,6 +37,8 @@ public class LlamaEngine {
     private final AtomicInteger queuedTaskTasks = new AtomicInteger(0);
     private final AtomicInteger pendingChatTasks = new AtomicInteger(0);
     private final ExecutorService inferenceExecutor;
+    private final Object taskArrivalLock = new Object();
+    private volatile boolean hasPendingTasks = false;
     private volatile boolean running = true;
     private volatile InferenceLane currentLane;
     private volatile boolean taskSuspended;
@@ -120,7 +122,7 @@ public class LlamaEngine {
     }
 
     private void startWorker() {
-        inferenceExecutor.submit(new TaskExecutor(this, chatQueue));
+        inferenceExecutor.submit(new TaskExecutor(this));
         System.out.println("[LlamaEngine:" + engineName + "] Inference worker started.");
     }
 
@@ -157,6 +159,7 @@ public class LlamaEngine {
                 pendingChatTasks.decrementAndGet();
                 throw new RejectedExecutionException("chat inference queue is full");
             }
+            notifyTaskArrival();
             return;
         }
         if (queuedTaskTasks.get() >= taskLaneConfig.getMaxQueueSize()) {
@@ -168,10 +171,11 @@ public class LlamaEngine {
             queuedTaskTasks.decrementAndGet();
             throw new RejectedExecutionException("task inference queue is full");
         }
+        notifyTaskArrival();
     }
 
-    InferenceTask pollChatTask(long timeout, TimeUnit unit) throws InterruptedException {
-        InferenceTask task = chatQueue.poll(timeout, unit);
+    InferenceTask pollChatTaskNonBlocking() {
+        InferenceTask task = chatQueue.poll();
         if (task != null) pendingChatTasks.decrementAndGet();
         return task;
     }
@@ -181,6 +185,38 @@ public class LlamaEngine {
         if (prioritizedTask == null) return null;
         queuedTaskTasks.decrementAndGet();
         return prioritizedTask.getTask();
+    }
+
+    void requeueTask(InferenceTask task) {
+        if (task == null) return;
+        if (task.getLane() == InferenceLane.CHAT) {
+            pendingChatTasks.incrementAndGet();
+            chatQueue.offer(task);
+        } else {
+            queuedTaskTasks.incrementAndGet();
+            taskQueue.offer(new PrioritizedInferenceTask(task));
+        }
+        notifyTaskArrival();
+    }
+
+    void notifyTaskArrival() {
+        hasPendingTasks = true;
+        synchronized (taskArrivalLock) {
+            taskArrivalLock.notifyAll();
+        }
+    }
+
+    void awaitTaskArrival() throws InterruptedException {
+        if (hasPendingTasks) {
+            hasPendingTasks = false;
+            return;
+        }
+        synchronized (taskArrivalLock) {
+            while (!hasPendingTasks && running) {
+                taskArrivalLock.wait();
+            }
+            hasPendingTasks = false;
+        }
     }
 
     public int peekTaskPriority() {
@@ -233,6 +269,7 @@ public class LlamaEngine {
     public void shutdown() {
         if (!running) return;
         running = false;
+        notifyTaskArrival();
         System.out.println("[LlamaEngine:" + engineName + "] Shutting down...");
         inferenceExecutor.shutdown();
         try {

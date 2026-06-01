@@ -1,42 +1,61 @@
 package com.rheinmetal.tianshu.libs.llm;
 
 public class SamplerConfig {
+    public Float temperature;
+    public Integer topK;
+    public Float topP;
+    public Float minP;
+    public Float penaltyRepeat;
+    public Float penaltyFreq;
+    public Float penaltyPresent;
+    public Integer penaltyLastN;
+    public Boolean enableThinking;
+    public String grammarStr;
+    public String grammarRoot;
 
-    private float temperature = 0.0f;
-    private int topK = 40;
-    private float topP = 0.95f;
-    private float minP = 0.05f;
-    private float penaltyRepeat = 1.0f;
-    private float penaltyFreq = 0.0f;
-    private float penaltyPresent = 0.0f;
-    private int penaltyLastN = 64;
-    private String grammarStr = null;
-    private String grammarRoot = "root";
-    private boolean enableThinking = false;
+    public SamplerConfig() {
+        this.temperature = 0.0f;
+        this.topK = 40;
+        this.topP = 0.95f;
+        this.minP = 0.05f;
+        this.penaltyRepeat = 1.0f;
+        this.penaltyFreq = 0.0f;
+        this.penaltyPresent = 0.0f;
+        this.penaltyLastN = 64;
+        this.enableThinking = false;
+        this.grammarRoot = "root";
+    }
 
-    public float getTemperature() { return temperature; }
-    public void setTemperature(float temperature) { this.temperature = temperature; }
+    public static SamplerConfig defaults() {
+        return new SamplerConfig();
+    }
 
-    public int getTopK() { return topK; }
-    public void setTopK(int topK) { this.topK = topK; }
+    public Float getTemperature() { return temperature; }
+    public void setTemperature(Float temperature) { this.temperature = temperature; }
 
-    public float getTopP() { return topP; }
-    public void setTopP(float topP) { this.topP = topP; }
+    public Integer getTopK() { return topK; }
+    public void setTopK(Integer topK) { this.topK = topK; }
 
-    public float getMinP() { return minP; }
-    public void setMinP(float minP) { this.minP = minP; }
+    public Float getTopP() { return topP; }
+    public void setTopP(Float topP) { this.topP = topP; }
 
-    public float getPenaltyRepeat() { return penaltyRepeat; }
-    public void setPenaltyRepeat(float penaltyRepeat) { this.penaltyRepeat = penaltyRepeat; }
+    public Float getMinP() { return minP; }
+    public void setMinP(Float minP) { this.minP = minP; }
 
-    public float getPenaltyFreq() { return penaltyFreq; }
-    public void setPenaltyFreq(float penaltyFreq) { this.penaltyFreq = penaltyFreq; }
+    public Float getPenaltyRepeat() { return penaltyRepeat; }
+    public void setPenaltyRepeat(Float penaltyRepeat) { this.penaltyRepeat = penaltyRepeat; }
 
-    public float getPenaltyPresent() { return penaltyPresent; }
-    public void setPenaltyPresent(float penaltyPresent) { this.penaltyPresent = penaltyPresent; }
+    public Float getPenaltyFreq() { return penaltyFreq; }
+    public void setPenaltyFreq(Float penaltyFreq) { this.penaltyFreq = penaltyFreq; }
 
-    public int getPenaltyLastN() { return penaltyLastN; }
-    public void setPenaltyLastN(int penaltyLastN) { this.penaltyLastN = penaltyLastN; }
+    public Float getPenaltyPresent() { return penaltyPresent; }
+    public void setPenaltyPresent(Float penaltyPresent) { this.penaltyPresent = penaltyPresent; }
+
+    public Integer getPenaltyLastN() { return penaltyLastN; }
+    public void setPenaltyLastN(Integer penaltyLastN) { this.penaltyLastN = penaltyLastN; }
+
+    public Boolean getEnableThinking() { return enableThinking; }
+    public void setEnableThinking(Boolean enableThinking) { this.enableThinking = enableThinking; }
 
     public String getGrammarStr() { return grammarStr; }
     public void setGrammarStr(String grammarStr) { this.grammarStr = grammarStr; }
@@ -46,6 +65,13 @@ public class SamplerConfig {
 
     public boolean hasGrammar() { return grammarStr != null && !grammarStr.isEmpty(); }
 
-    public boolean isEnableThinking() { return enableThinking; }
-    public void setEnableThinking(boolean enableThinking) { this.enableThinking = enableThinking; }
+    float temperature() { return temperature != null ? temperature : 0.0f; }
+    int topK() { return topK != null ? topK : 40; }
+    float topP() { return topP != null ? topP : 0.95f; }
+    float minP() { return minP != null ? minP : 0.05f; }
+    float penaltyRepeat() { return penaltyRepeat != null ? penaltyRepeat : 1.0f; }
+    float penaltyFreq() { return penaltyFreq != null ? penaltyFreq : 0.0f; }
+    float penaltyPresent() { return penaltyPresent != null ? penaltyPresent : 0.0f; }
+    int penaltyLastN() { return penaltyLastN != null ? penaltyLastN : 64; }
+    boolean enableThinking() { return Boolean.TRUE.equals(enableThinking); }
 }

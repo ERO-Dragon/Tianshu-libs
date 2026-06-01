@@ -1,5 +1,6 @@
 package com.rheinmetal.tianshu.libs.core;
 
+import com.rheinmetal.tianshu.libs.llm.ChatMessage;
 import com.rheinmetal.tianshu.libs.llm.EmbeddingEngine;
 import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
@@ -8,9 +9,8 @@ import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
 import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
 import com.rheinmetal.tianshu.libs.llm.SamplerConfig;
 import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
-import com.rheinmetal.tianshu.libs.rag.RagService;
+import com.rheinmetal.tianshu.libs.rag.RagSearchResult;
 import com.rheinmetal.tianshu.libs.web.ChatController;
-import com.rheinmetal.tianshu.libs.web.ChatController.ChatMessage;
 import com.rheinmetal.tianshu.libs.web.ChatController.ChatRequest;
 
 import java.util.ArrayList;
@@ -28,7 +28,7 @@ public class JavaLlamaServer {
     private final ServerConfig config;
     private final AtomicBoolean started = new AtomicBoolean(false);
     private volatile ModelRegistry models;
-    private volatile RagService ragService;
+    private volatile LibsApi libsApi;
     private volatile ChatController chatController;
 
     private JavaLlamaServer(ServerConfig config) {
@@ -47,6 +47,7 @@ public class JavaLlamaServer {
         LlamaEngine engine = null;
         EmbeddingEngine embeddingEngine = null;
         ModelRegistry localModels = null;
+        LibsApi localLibsApi = null;
         try {
             String alias = config.alias;
             if (alias == null || alias.isBlank() || alias.equals("unknown")) {
@@ -82,11 +83,12 @@ public class JavaLlamaServer {
             }
 
             localModels = new ModelRegistry(engine, embeddingEngine);
-            RagService localRagService = ServerApp.buildRagService(config, localModels);
-            ChatController localChatController = new ChatController(localModels.getChatEngine(), embeddingEngine, localRagService, config.requestTimeoutSeconds);
+            localLibsApi = new LibsApi(engine, embeddingEngine, config.requestTimeoutSeconds);
+
+            ChatController localChatController = new ChatController(localModels.getChatEngine(), embeddingEngine, config.requestTimeoutSeconds);
 
             this.models = localModels;
-            this.ragService = localRagService;
+            this.libsApi = localLibsApi;
             this.chatController = localChatController;
         } catch (Exception e) {
             try {
@@ -106,7 +108,7 @@ public class JavaLlamaServer {
     public synchronized void shutdown() {
         ModelRegistry currentModels = this.models;
         this.models = null;
-        this.ragService = null;
+        this.libsApi = null;
         this.chatController = null;
         if (currentModels != null) {
             try {
@@ -126,11 +128,7 @@ public class JavaLlamaServer {
     }
 
     public String chatSync(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
-        ChatRequest request = new ChatRequest();
-        request.messages = messages;
-        request.max_tokens = maxTokens > 0 ? maxTokens : null;
-        request.lane = InferenceLane.CHAT.wireName();
-        return requireChatController().executeSyncChat(request, sampler);
+        return requireLibsApi().chat(messages, sampler, maxTokens);
     }
 
     public void chatStream(String message, String systemPrompt, Consumer<String> onToken) throws Exception {
@@ -138,11 +136,7 @@ public class JavaLlamaServer {
     }
 
     public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
-        ChatRequest request = new ChatRequest();
-        request.messages = messages;
-        request.lane = InferenceLane.CHAT.wireName();
-        requireChatController().executeStreamChat(request, sampler, onToken)
-                .get(config.requestTimeoutSeconds, TimeUnit.SECONDS);
+        requireLibsApi().chatStream(messages, sampler, onToken);
     }
 
     public CompletableFuture<String> submitTask(List<ChatMessage> messages,
@@ -150,21 +144,38 @@ public class JavaLlamaServer {
                                                 int maxTokens,
                                                 int priority,
                                                 boolean preemptible) {
-        ChatRequest request = new ChatRequest();
-        request.messages = messages;
-        request.max_tokens = maxTokens > 0 ? maxTokens : null;
-        request.task_priority = priority;
-        request.task_preemptible = preemptible;
-        request.lane = InferenceLane.TASK.wireName();
-        return requireChatController().executeAsyncChat(request, sampler);
+        return requireLibsApi().task(messages, sampler, maxTokens, priority, preemptible);
+    }
+
+    public float[] embed(String text) throws Exception {
+        return requireLibsApi().embed(text);
+    }
+
+    public float[][] embed(List<String> texts) throws Exception {
+        return requireLibsApi().embed(texts);
+    }
+
+    public List<RagSearchResult> search(String queryText, List<String> texts) {
+        return requireLibsApi().search(queryText, texts);
+    }
+
+    public List<RagSearchResult> search(String queryText, List<String> texts, int topK, float threshold) {
+        return requireLibsApi().search(queryText, texts, topK, threshold);
     }
 
     public boolean isReady() {
-        return models != null && models.isReady();
+        LibsApi api = libsApi;
+        return api != null && api.isReady();
     }
 
     public boolean hasChatQueueCapacity() {
-        return models != null && models.getChatEngine().hasQueueCapacity();
+        LibsApi api = libsApi;
+        return api != null && api.hasChatQueueCapacity();
+    }
+
+    public boolean hasTaskQueueCapacity() {
+        LibsApi api = libsApi;
+        return api != null && api.hasTaskQueueCapacity();
     }
 
     public boolean hasQueueCapacity() {
@@ -172,19 +183,16 @@ public class JavaLlamaServer {
     }
 
     public int getChatQueueSize() {
-        return models == null ? 0 : models.getChatEngine().getChatQueueSize();
-    }
-
-    private ModelRegistry requireModels() {
         ModelRegistry current = models;
-        if (current == null) {
-            throw new IllegalStateException("Service is not started");
-        }
-        return current;
+        return current == null ? 0 : current.getChatEngine().getChatQueueSize();
     }
 
-    private ChatController requireChatController() {
-        ChatController current = chatController;
+    public ChatController getChatController() {
+        return chatController;
+    }
+
+    private LibsApi requireLibsApi() {
+        LibsApi current = libsApi;
         if (current == null) {
             throw new IllegalStateException("Service is not started");
         }
@@ -197,9 +205,9 @@ public class JavaLlamaServer {
         }
         List<ChatMessage> messages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(new ChatMessage("system", systemPrompt));
+            messages.add(ChatMessage.system(systemPrompt));
         }
-        messages.add(new ChatMessage("user", message));
+        messages.add(ChatMessage.user(message));
         return messages;
     }
 
@@ -218,16 +226,6 @@ public class JavaLlamaServer {
         copy.embeddingThreads = source.embeddingThreads;
         copy.embeddingGpuLayers = source.embeddingGpuLayers;
         copy.embeddingAlias = source.embeddingAlias;
-        copy.staticRagPath = source.staticRagPath;
-        copy.memoryRagPath = source.memoryRagPath;
-        copy.ragRootPath = source.ragRootPath;
-        copy.ragProfileRefreshIntervalMillis = source.ragProfileRefreshIntervalMillis;
-        copy.worldStaticRagScanIntervalMillis = source.worldStaticRagScanIntervalMillis;
-        copy.memoryRagRefreshIntervalMillis = source.memoryRagRefreshIntervalMillis;
-        copy.staticRagTopK = source.staticRagTopK;
-        copy.dynamicRagTopK = source.dynamicRagTopK;
-        copy.ragChunkSize = source.ragChunkSize;
-        copy.ragChunkOverlap = source.ragChunkOverlap;
         copy.maxQueueSize = source.maxQueueSize;
         copy.chatContext = source.chatContext;
         copy.chatThreads = source.chatThreads;
@@ -317,41 +315,6 @@ public class JavaLlamaServer {
 
         public Builder embeddingAlias(String name) {
             config.embeddingAlias = name;
-            return this;
-        }
-
-        public Builder staticRagPath(String path) {
-            config.staticRagPath = path;
-            return this;
-        }
-
-        public Builder memoryRagPath(String path) {
-            config.memoryRagPath = path;
-            return this;
-        }
-
-        public Builder ragRootPath(String path) {
-            config.ragRootPath = path;
-            return this;
-        }
-
-        public Builder ragChunkSize(int n) {
-            config.ragChunkSize = n;
-            return this;
-        }
-
-        public Builder ragChunkOverlap(int n) {
-            config.ragChunkOverlap = n;
-            return this;
-        }
-
-        public Builder staticRagTopK(int n) {
-            config.staticRagTopK = n;
-            return this;
-        }
-
-        public Builder dynamicRagTopK(int n) {
-            config.dynamicRagTopK = n;
             return this;
         }
 

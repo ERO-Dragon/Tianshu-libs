@@ -1,19 +1,19 @@
 package com.rheinmetal.tianshu.libs.rag;
 
 public class RagSearchResult {
-    private final RagChunk chunk;
-    private final double score;
+    public String content;
+    public double score;
 
-    public RagSearchResult(RagChunk chunk, double score) {
-        this.chunk = chunk;
+    public RagSearchResult() {
+    }
+
+    public RagSearchResult(String content, double score) {
+        this.content = content;
         this.score = score;
     }
 
-    public RagChunk getChunk() {
-        return chunk;
-    }
-
-    public double getScore() {
-        return score;
-    }
+    public String getContent() { return content; }
+    public void setContent(String content) { this.content = content; }
+    public double getScore() { return score; }
+    public void setScore(double score) { this.score = score; }
 }

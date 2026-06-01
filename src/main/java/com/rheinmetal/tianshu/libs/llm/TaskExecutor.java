@@ -6,19 +6,15 @@ import org.argeo.jjml.llm.params.DefaultSamplerChainParams;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 public class TaskExecutor implements Runnable {
 
     private final LlamaEngine engine;
-    private final BlockingQueue<InferenceTask> chatQueue;
     private final List<SuspendedTask> suspendedTasks = new ArrayList<>();
 
-    public TaskExecutor(LlamaEngine engine, BlockingQueue<InferenceTask> chatQueue) {
+    public TaskExecutor(LlamaEngine engine) {
         this.engine = engine;
-        this.chatQueue = chatQueue;
     }
 
     @Override
@@ -55,14 +51,28 @@ public class TaskExecutor implements Runnable {
     }
 
     private InferenceTask selectNextTask() throws InterruptedException {
-        InferenceTask chatTask = engine.pollChatTask(1, TimeUnit.SECONDS);
+        InferenceTask chatTask = engine.pollChatTaskNonBlocking();
         if (chatTask != null) return chatTask;
+        
         SuspendedTask suspended = selectBestSuspendedTask();
         int queuedPriority = engine.peekTaskPriority();
-        if (suspended != null && suspended.task.getTaskPriority() >= queuedPriority) return suspended.task;
-        InferenceTask queuedTask = engine.pollTaskTask();
-        if (queuedTask != null) return queuedTask;
-        return suspended == null ? null : suspended.task;
+        
+        InferenceTask taskTask = engine.pollTaskTask();
+        if (taskTask != null) {
+            if (suspended != null && suspended.task.getTaskPriority() >= queuedPriority && 
+                suspended.task.getTaskPriority() >= taskTask.getTaskPriority()) {
+                engine.requeueTask(taskTask);
+                return suspended.task;
+            }
+            return taskTask;
+        }
+        
+        if (suspended != null) {
+            return suspended.task;
+        }
+        
+        engine.awaitTaskArrival();
+        return null;
     }
 
     private SuspendedTask selectBestSuspendedTask() {
@@ -130,20 +140,20 @@ public class TaskExecutor implements Runnable {
 
     private LlamaCppSamplerChain buildSamplerChain(SamplerConfig config) {
         DefaultSamplerChainParams params = new DefaultSamplerChainParams(
-                config.getTemperature(),
+                config.temperature(),
                 0,
                 0L,
-                config.getTopK(),
-                config.getTopP(),
-                config.getMinP(),
+                config.topK(),
+                config.topP(),
+                config.minP(),
                 1.0F,
                 1.0F,
                 0.0F,
                 1.0F,
-                config.getPenaltyLastN(),
-                config.getPenaltyRepeat(),
-                config.getPenaltyFreq(),
-                config.getPenaltyPresent(),
+                config.penaltyLastN(),
+                config.penaltyRepeat(),
+                config.penaltyFreq(),
+                config.penaltyPresent(),
                 false,
                 false
         );
