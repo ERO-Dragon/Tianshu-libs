@@ -74,7 +74,7 @@ public class LibsApi {
     }
 
     public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
-        doStreamChat(InferenceLane.CHAT, messages, sampler, 0, onToken).get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        doStreamChat(InferenceLane.CHAT, messages, sampler, 0, 0, false, onToken).get(requestTimeoutSeconds, TimeUnit.SECONDS);
     }
 
     public CompletableFuture<String> task(List<ChatMessage> messages) {
@@ -87,6 +87,15 @@ public class LibsApi {
                                            int priority,
                                            boolean preemptible) {
         return doAsyncChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible);
+    }
+
+    public CompletableFuture<String> taskStream(List<ChatMessage> messages,
+                                           SamplerConfig sampler,
+                                           int maxTokens,
+                                           int priority,
+                                           boolean preemptible,
+                                           Consumer<String> tokenConsumer) {
+        return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, tokenConsumer);
     }
 
     public float[] embed(String text) throws Exception {
@@ -147,13 +156,15 @@ public class LibsApi {
                                                     List<ChatMessage> messages,
                                                     SamplerConfig sampler,
                                                     int maxTokens,
+                                                    int priority,
+                                                    boolean preemptible,
                                                     Consumer<String> tokenConsumer) {
         try {
             if (!chatEngine.hasQueueCapacity(lane)) {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
-            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, 0, false, tokenConsumer);
+            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer);
             chatEngine.submitTask(task);
             return task.getSyncFuture();
         } catch (Exception e) {

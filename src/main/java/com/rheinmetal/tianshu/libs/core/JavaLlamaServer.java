@@ -119,15 +119,15 @@ public class JavaLlamaServer {
         started.set(false);
     }
 
-    public String chatSync(String message, String systemPrompt) throws Exception {
-        return chatSync(toMessages(message, systemPrompt));
+    public String chat(String message, String systemPrompt) throws Exception {
+        return chat(toMessages(message, systemPrompt));
     }
 
-    public String chatSync(List<ChatMessage> messages) throws Exception {
-        return chatSync(messages, null, 0);
+    public String chat(List<ChatMessage> messages) throws Exception {
+        return chat(messages, null, 0);
     }
 
-    public String chatSync(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+    public String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
         return requireLibsApi().chat(messages, sampler, maxTokens);
     }
 
@@ -139,12 +139,21 @@ public class JavaLlamaServer {
         requireLibsApi().chatStream(messages, sampler, onToken);
     }
 
-    public CompletableFuture<String> submitTask(List<ChatMessage> messages,
+    public CompletableFuture<String> task(List<ChatMessage> messages,
                                                 SamplerConfig sampler,
                                                 int maxTokens,
                                                 int priority,
                                                 boolean preemptible) {
         return requireLibsApi().task(messages, sampler, maxTokens, priority, preemptible);
+    }
+
+    public CompletableFuture<String> taskStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                int priority,
+                                                boolean preemptible,
+                                                Consumer<String> tokenConsumer) {
+        return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, tokenConsumer);
     }
 
     public float[] embed(String text) throws Exception {
