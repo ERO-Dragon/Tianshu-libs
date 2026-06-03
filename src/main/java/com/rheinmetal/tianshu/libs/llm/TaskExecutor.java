@@ -2,10 +2,13 @@ package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.*;
 import org.argeo.jjml.llm.params.DefaultSamplerChainParams;
+import org.argeo.jjml.llm.util.ThinkingMode;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 public class TaskExecutor implements Runnable {
@@ -24,8 +27,18 @@ public class TaskExecutor implements Runnable {
             try {
                 InferenceTask task = selectNextTask();
                 if (task == null) continue;
+                engine.setCurrentTask(task);
+                if (!engine.isRunning()) {
+                    task.cancel();
+                    task.getSyncFuture().cancel(false);
+                    clearSuspendedTask(task);
+                    engine.finishTask(task);
+                    break;
+                }
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
+                    clearSuspendedTask(task);
+                    engine.finishTask(task);
                     continue;
                 }
                 System.out.println("[TaskExecutor] Processing task " + task.getTaskId()
@@ -45,8 +58,10 @@ public class TaskExecutor implements Runnable {
                 e.printStackTrace();
             } finally {
                 engine.setCurrentLane(null);
+                engine.setCurrentTask(null);
             }
         }
+        cancelSuspendedTasks();
         System.out.println("[TaskExecutor] Worker loop exited.");
     }
 
@@ -111,6 +126,11 @@ public class TaskExecutor implements Runnable {
         }
         LlamaCppContext context = null;
         try {
+            if (task.isCancelled()) {
+                task.getSyncFuture().cancel(false);
+                engine.finishTask(task);
+                return ExecutionResult.COMPLETED;
+            }
             engine.setCurrentLane(task.getLane());
             context = engine.createContext(task.getLane());
             LlamaCppSamplerChain chain = buildSamplerChain(task.getSamplerConfig());
@@ -130,6 +150,7 @@ public class TaskExecutor implements Runnable {
                 removeSuspendedTask(task);
                 engine.setTaskSuspended(!suspendedTasks.isEmpty());
             }
+            engine.finishTask(task);
             return ExecutionResult.COMPLETED;
         } finally {
             if (context != null) {
@@ -170,29 +191,36 @@ public class TaskExecutor implements Runnable {
     }
 
     private ExecutionResult doChatInference(LlamaCppContext context, LlamaCppSamplerChain chain, InferenceTask task) throws IOException {
-        LlamaCppInstructProcessor processor = new LlamaCppInstructProcessor(context, chain);
+        FormattedPromptProcessor processor = new FormattedPromptProcessor(context, chain);
         writeMessages(processor, task);
 
         StringBuilder fullResponse = new StringBuilder();
         Consumer<String> callback = task.getStreamCallback();
-        String token;
         int generatedTokens = 0;
-        while ((token = processor.nextToken()) != null) {
+        while (task.getMaxTokens() <= 0 || generatedTokens < task.getMaxTokens()) {
             if (task.isCancelled()) break;
-            if (task.getMaxTokens() > 0 && generatedTokens >= task.getMaxTokens()) break;
+            String token = processor.nextToken();
+            if (token == null) break;
             generatedTokens++;
             fullResponse.append(token);
             if (callback != null) callback.accept(token);
         }
 
+        if (task.isCancelled()) {
+            task.getSyncFuture().cancel(false);
+            engine.finishTask(task);
+            return ExecutionResult.COMPLETED;
+        }
         task.getSyncFuture().complete(fullResponse.toString());
+        engine.finishTask(task);
         return ExecutionResult.COMPLETED;
     }
 
     private ExecutionResult doTaskInference(LlamaCppContext context, LlamaCppSamplerChain chain, InferenceTask task) throws IOException {
-        SuspendedTask state = findSuspendedTask(task);
+        SuspendedTask state = removeSuspendedTask(task);
         if (state == null) state = new SuspendedTask(task);
-        LlamaCppInstructProcessor processor = new LlamaCppInstructProcessor(context, chain);
+        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        FormattedPromptProcessor processor = new FormattedPromptProcessor(context, chain);
 
         if (state.savedState == null) {
             writeMessages(processor, task);
@@ -200,15 +228,16 @@ public class TaskExecutor implements Runnable {
             processor.loadContextState(state.savedState);
         }
 
-        String token;
         Consumer<String> callback = task.getStreamCallback();
-        while ((token = processor.nextToken()) != null) {
+        while (task.getMaxTokens() <= 0 || state.generatedTokens < task.getMaxTokens()) {
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
                 clearSuspendedTask(task);
+                engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
-            if (task.getMaxTokens() > 0 && state.generatedTokens >= task.getMaxTokens()) break;
+            String token = processor.nextToken();
+            if (token == null) break;
             state.generatedTokens++;
             state.generatedText.append(token);
             if (callback != null) callback.accept(token);
@@ -223,18 +252,75 @@ public class TaskExecutor implements Runnable {
 
         task.getSyncFuture().complete(state.generatedText.toString());
         clearSuspendedTask(task);
+        engine.finishTask(task);
         return ExecutionResult.COMPLETED;
     }
 
-    private void writeMessages(LlamaCppInstructProcessor processor, InferenceTask task) {
-        for (LlamaCppChatMessage msg : task.getMessages()) {
-            processor.write(msg.getRole(), msg.getContent());
+    private void writeMessages(FormattedPromptProcessor processor, InferenceTask task) {
+        SamplerConfig config = task.getSamplerConfig();
+        ChatTemplateOptions options = chatTemplateOptions(config);
+
+        String prompt = options.kwargs().isEmpty()
+                ? engine.getModel().formatChatMessages(task.getMessages(), options.thinkingMode())
+                : engine.getModel().formatChatMessagesJinja(task.getMessages(), true, options.thinkingMode(), options.kwargs());
+        processor.writePreFormatted(prompt);
+    }
+
+    private ChatTemplateOptions chatTemplateOptions(SamplerConfig config) {
+        ThinkingMode thinkingMode = config.effectiveThinkingMode();
+        Map<String, String> kwargs = config.chatTemplateKwargs();
+        if (kwargs.isEmpty()) return new ChatTemplateOptions(thinkingMode, kwargs);
+
+        Map<String, String> normalized = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : kwargs.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (key == null || key.isBlank()) {
+                throw new IllegalArgumentException("chatTemplateKwargs contains a blank key");
+            }
+            if (value == null) {
+                throw new IllegalArgumentException("chatTemplateKwargs value for '" + key + "' cannot be null");
+            }
+            String normalizedKey = key.trim();
+            if ("enable_thinking".equals(normalizedKey)) {
+                boolean kwargThinking = parseBooleanKwarg(normalizedKey, value);
+                ThinkingMode kwargMode = kwargThinking ? ThinkingMode.ENABLED : ThinkingMode.DISABLED;
+                if (thinkingMode == ThinkingMode.AUTO) {
+                    thinkingMode = kwargMode;
+                } else if (thinkingMode != kwargMode) {
+                    throw new IllegalArgumentException("Conflicting thinking settings: thinkingMode="
+                            + thinkingMode + " but chatTemplateKwargs.enable_thinking=" + value);
+                }
+                continue;
+            }
+            normalized.put(normalizedKey, value);
         }
+        return new ChatTemplateOptions(thinkingMode, normalized);
+    }
+
+    private boolean parseBooleanKwarg(String key, String value) {
+        String normalized = value.trim().toLowerCase();
+        if ("true".equals(normalized)) return true;
+        if ("false".equals(normalized)) return false;
+        throw new IllegalArgumentException("chatTemplateKwargs." + key + " must be 'true' or 'false', got '" + value + "'");
+    }
+
+    private record ChatTemplateOptions(ThinkingMode thinkingMode, Map<String, String> kwargs) {
     }
 
     private void clearSuspendedTask(InferenceTask task) {
         removeSuspendedTask(task);
         engine.setTaskSuspended(!suspendedTasks.isEmpty());
+    }
+
+    private void cancelSuspendedTasks() {
+        for (SuspendedTask suspended : suspendedTasks) {
+            suspended.task.cancel();
+            suspended.task.getSyncFuture().cancel(false);
+            engine.finishTask(suspended.task);
+        }
+        suspendedTasks.clear();
+        engine.setTaskSuspended(false);
     }
 
     private enum ExecutionResult {

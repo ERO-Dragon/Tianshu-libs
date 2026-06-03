@@ -9,19 +9,15 @@ public class ServerConfig {
     public static final int DEFAULT_CONTEXT_SIZE = 16000;
     public static final int DEFAULT_THREAD_COUNT = Runtime.getRuntime().availableProcessors();
     public static final int DEFAULT_GPU_LAYERS = 999;
-    public static final String DEFAULT_HOST = "127.0.0.1";
-    public static final int DEFAULT_PORT = 7158;
     public static final int DEFAULT_MAX_QUEUE_SIZE = 4;
     public static final int DEFAULT_TASK_MAX_QUEUE_SIZE = 1;
     public static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
 
     public String modelPath;
-    public int port = DEFAULT_PORT;
-    public String host = DEFAULT_HOST;
     public int contextSize = DEFAULT_CONTEXT_SIZE;
     public int threads = DEFAULT_THREAD_COUNT;
     public int gpuLayers = DEFAULT_GPU_LAYERS;
-    public String alias = "unknown";
+    public String modelAlias = "unknown";
     public String modelProfile;
     public String embeddingModelPath;
     public int embeddingContextSize = DEFAULT_CONTEXT_SIZE;
@@ -39,62 +35,6 @@ public class ServerConfig {
     public KvCacheType cacheTypeK;
     public KvCacheType cacheTypeV;
     public int requestTimeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS;
-    public boolean help;
-
-    public static ServerConfig parse(String[] args) {
-        ServerConfig config = new ServerConfig();
-        boolean chatContextSet = false;
-        boolean chatThreadsSet = false;
-        boolean chatMaxQueueSet = false;
-        boolean taskContextSet = false;
-        List<String> errors = new ArrayList<>();
-        for (int i = 0; i < args.length; i++) {
-            String arg = args[i];
-            try {
-                switch (arg) {
-                    case "-m", "--model" -> config.modelPath = value(args, ++i, arg);
-                    case "-c", "--context" -> config.contextSize = intValue(args, ++i, arg);
-                    case "-t", "--threads" -> config.threads = intValue(args, ++i, arg);
-                    case "--host" -> config.host = value(args, ++i, arg);
-                    case "--port" -> config.port = intValue(args, ++i, arg);
-                    case "--alias" -> config.alias = value(args, ++i, arg);
-                    case "--model-profile" -> config.modelProfile = value(args, ++i, arg);
-                    case "--embedding-model" -> config.embeddingModelPath = value(args, ++i, arg);
-                    case "--embedding-context" -> config.embeddingContextSize = intValue(args, ++i, arg);
-                    case "--embedding-threads" -> config.embeddingThreads = intValue(args, ++i, arg);
-                    case "--embedding-gpu-layers" -> config.embeddingGpuLayers = intValue(args, ++i, arg);
-                    case "--embedding-alias" -> config.embeddingAlias = value(args, ++i, arg);
-                    case "--max-queue-size" -> config.maxQueueSize = intValue(args, ++i, arg);
-                    case "--chat-context" -> { config.chatContext = intValue(args, ++i, arg); chatContextSet = true; }
-                    case "--chat-threads" -> { config.chatThreads = intValue(args, ++i, arg); chatThreadsSet = true; }
-                    case "--chat-max-queue-size" -> { config.chatMaxQueueSize = intValue(args, ++i, arg); chatMaxQueueSet = true; }
-                    case "--task-context" -> { config.taskContext = intValue(args, ++i, arg); taskContextSet = true; }
-                    case "--task-threads" -> config.taskThreads = intValue(args, ++i, arg);
-                    case "--task-max-queue-size" -> config.taskMaxQueueSize = intValue(args, ++i, arg);
-                    case "--task-suspend-on-chat" -> config.taskSuspendOnChat = booleanValue(args, ++i, arg);
-                    case "--cache-type-k" -> config.cacheTypeK = KvCacheType.parse(value(args, ++i, arg));
-                    case "--cache-type-v" -> config.cacheTypeV = KvCacheType.parse(value(args, ++i, arg));
-                    case "--request-timeout-seconds" -> config.requestTimeoutSeconds = intValue(args, ++i, arg);
-                    case "-ngl", "--n-gpu-layers" -> config.gpuLayers = intValue(args, ++i, arg);
-                    case "-h", "--help" -> config.help = true;
-                    default -> errors.add("Unknown option: " + arg);
-                }
-            } catch (IllegalArgumentException e) {
-                errors.add(e.getMessage());
-            }
-        }
-        if (!chatContextSet) config.chatContext = config.contextSize;
-        if (!chatThreadsSet) config.chatThreads = config.threads;
-        if (!chatMaxQueueSet) config.chatMaxQueueSize = config.maxQueueSize;
-        if (!taskContextSet) config.taskContext = config.contextSize;
-        if (!config.help) {
-            validate(config, errors);
-        }
-        if (!errors.isEmpty()) {
-            throw new ConfigException(String.join(System.lineSeparator(), errors));
-        }
-        return config;
-    }
 
     static void validateOrThrow(ServerConfig config) {
         List<String> errors = new ArrayList<>();
@@ -104,47 +44,22 @@ public class ServerConfig {
         }
     }
 
-    private static String value(String[] args, int index, String option) {
-        if (index >= args.length || args[index].startsWith("-")) {
-            throw new IllegalArgumentException("Missing value for option: " + option);
-        }
-        return args[index];
-    }
-
-    private static int intValue(String[] args, int index, String option) {
-        String value = value(args, index, option);
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid integer for option " + option + ": " + value);
-        }
-    }
-
-    private static boolean booleanValue(String[] args, int index, String option) {
-        String value = value(args, index, option);
-        if ("true".equalsIgnoreCase(value)) return true;
-        if ("false".equalsIgnoreCase(value)) return false;
-        throw new IllegalArgumentException("Invalid boolean for option " + option + ": " + value);
-    }
-
     private static void validate(ServerConfig config, List<String> errors) {
-        if (config.modelPath == null || config.modelPath.isBlank()) errors.add("Missing required option: --model <path>");
-        if (!DEFAULT_HOST.equals(config.host)) errors.add("Unsafe host: only 127.0.0.1 is allowed");
-        range(config.port, 1, 65535, "--port", errors);
-        range(config.contextSize, 512, 262144, "--context", errors);
-        range(config.chatContext, 512, 262144, "--chat-context", errors);
-        range(config.taskContext, 512, 262144, "--task-context", errors);
-        range(config.embeddingContextSize, 512, 262144, "--embedding-context", errors);
-        range(config.threads, 1, 512, "--threads", errors);
-        range(config.chatThreads, 1, 512, "--chat-threads", errors);
-        range(config.taskThreads, 1, 512, "--task-threads", errors);
-        range(config.embeddingThreads, 1, 512, "--embedding-threads", errors);
-        range(config.gpuLayers, 0, 9999, "--n-gpu-layers", errors);
-        range(config.embeddingGpuLayers, 0, 9999, "--embedding-gpu-layers", errors);
-        range(config.maxQueueSize, 1, 1024, "--max-queue-size", errors);
-        range(config.chatMaxQueueSize, 1, 1024, "--chat-max-queue-size", errors);
-        range(config.taskMaxQueueSize, 1, 1024, "--task-max-queue-size", errors);
-        range(config.requestTimeoutSeconds, 1, 3600, "--request-timeout-seconds", errors);
+        if (config.modelPath == null || config.modelPath.isBlank()) errors.add("modelPath is required");
+        range(config.contextSize, 512, 262144, "contextSize", errors);
+        range(config.chatContext, 512, 262144, "chatContext", errors);
+        range(config.taskContext, 512, 262144, "taskContext", errors);
+        range(config.embeddingContextSize, 512, 262144, "embeddingContextSize", errors);
+        range(config.threads, 1, 512, "threads", errors);
+        range(config.chatThreads, 1, 512, "chatThreads", errors);
+        range(config.taskThreads, 1, 512, "taskThreads", errors);
+        range(config.embeddingThreads, 1, 512, "embeddingThreads", errors);
+        range(config.gpuLayers, 0, 9999, "gpuLayers", errors);
+        range(config.embeddingGpuLayers, 0, 9999, "embeddingGpuLayers", errors);
+        range(config.maxQueueSize, 1, 1024, "maxQueueSize", errors);
+        range(config.chatMaxQueueSize, 1, 1024, "chatMaxQueueSize", errors);
+        range(config.taskMaxQueueSize, 1, 1024, "taskMaxQueueSize", errors);
+        range(config.requestTimeoutSeconds, 1, 3600, "requestTimeoutSeconds", errors);
     }
 
     private static void range(int value, int min, int max, String option, List<String> errors) {

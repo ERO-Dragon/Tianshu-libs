@@ -18,6 +18,10 @@ public class PrioritizedInferenceTask implements Comparable<PrioritizedInference
         return task;
     }
 
+    public boolean wraps(InferenceTask other) {
+        return task == other;
+    }
+
     @Override
     public int compareTo(PrioritizedInferenceTask other) {
         int priorityComparison = Integer.compare(other.task.getTaskPriority(), task.getTaskPriority());

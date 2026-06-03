@@ -35,6 +35,10 @@ public class ModelRegistry {
         return chatEngine.isModelLoaded() && (embeddingEngine == null || embeddingEngine.isModelLoaded());
     }
 
+    public boolean supportsEnableThinking() {
+        return chatEngine.supportsEnableThinking();
+    }
+
     public void shutdown() {
         if (!shutdown.compareAndSet(false, true)) return;
         if (embeddingEngine != null) {

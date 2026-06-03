@@ -22,6 +22,8 @@ public class LibsApi {
     private static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
     private static final int DEFAULT_TOP_K = 4;
     private static final float DEFAULT_THRESHOLD = 0.7f;
+    private static final int MAX_EMBEDDING_TEXT_LENGTH = 8192;
+    private static final int MAX_EMBEDDING_BATCH_SIZE = 100;
 
     private final LlamaEngine chatEngine;
     private final EmbeddingEngine embeddingEngine;
@@ -40,6 +42,16 @@ public class LibsApi {
         this.embeddingEngine = embeddingEngine;
         this.vectorSearch = new VectorSearch();
         this.requestTimeoutSeconds = Math.max(1, requestTimeoutSeconds);
+    }
+
+    private static class StreamResult {
+        final InferenceTask task;
+        final CompletableFuture<String> future;
+
+        StreamResult(InferenceTask task, CompletableFuture<String> future) {
+            this.task = task;
+            this.future = future;
+        }
     }
 
     public boolean isReady() {
@@ -74,7 +86,13 @@ public class LibsApi {
     }
 
     public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
-        doStreamChat(InferenceLane.CHAT, messages, sampler, 0, 0, false, onToken).get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        StreamResult result = doStreamChat(InferenceLane.CHAT, messages, sampler, 0, 0, false, onToken);
+        try {
+            result.future.get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            chatEngine.cancelTask(result.task);
+            throw new Exception("Request timeout after " + requestTimeoutSeconds + " seconds");
+        }
     }
 
     public CompletableFuture<String> task(List<ChatMessage> messages) {
@@ -95,12 +113,18 @@ public class LibsApi {
                                            int priority,
                                            boolean preemptible,
                                            Consumer<String> tokenConsumer) {
-        return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, tokenConsumer);
+        return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, tokenConsumer).future;
     }
 
     public float[] embed(String text) throws Exception {
         if (embeddingEngine == null) {
             throw new IllegalStateException("Embedding engine is not configured");
+        }
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("text cannot be null or blank");
+        }
+        if (text.length() > MAX_EMBEDDING_TEXT_LENGTH) {
+            throw new IllegalArgumentException("text exceeds maximum length of " + MAX_EMBEDDING_TEXT_LENGTH + " characters");
         }
         return embeddingEngine.embed(text);
     }
@@ -108,6 +132,21 @@ public class LibsApi {
     public float[][] embed(List<String> texts) throws Exception {
         if (embeddingEngine == null) {
             throw new IllegalStateException("Embedding engine is not configured");
+        }
+        if (texts == null || texts.isEmpty()) {
+            throw new IllegalArgumentException("texts cannot be null or empty");
+        }
+        if (texts.size() > MAX_EMBEDDING_BATCH_SIZE) {
+            throw new IllegalArgumentException("batch size exceeds maximum of " + MAX_EMBEDDING_BATCH_SIZE);
+        }
+        for (int i = 0; i < texts.size(); i++) {
+            String text = texts.get(i);
+            if (text == null || text.isBlank()) {
+                throw new IllegalArgumentException("text at index " + i + " cannot be null or blank");
+            }
+            if (text.length() > MAX_EMBEDDING_TEXT_LENGTH) {
+                throw new IllegalArgumentException("text at index " + i + " exceeds maximum length of " + MAX_EMBEDDING_TEXT_LENGTH + " characters");
+            }
         }
         return embeddingEngine.embed(texts);
     }
@@ -126,10 +165,32 @@ public class LibsApi {
         if (texts == null || texts.isEmpty()) {
             return List.of();
         }
+        if (topK <= 0) {
+            throw new IllegalArgumentException("topK must be positive");
+        }
+        if (Float.isNaN(threshold) || threshold < -1.0f || threshold > 1.0f) {
+            throw new IllegalArgumentException("threshold must be between -1.0 and 1.0");
+        }
         try {
+            List<String> searchableTexts = filterSearchableTexts(texts);
+            if (searchableTexts.isEmpty()) {
+                return List.of();
+            }
+            int expectedDimension = embeddingEngine.getEmbeddingSize();
             float[] queryVector = embeddingEngine.embed(queryText);
-            float[][] textVectors = embeddingEngine.embed(texts);
-            List<RagSearchResult> allResults = vectorSearch.searchWithQuery(queryVector, texts, textVectors, topK);
+            if (queryVector.length != expectedDimension) {
+                throw new IllegalArgumentException("Query vector dimension " + queryVector.length + " does not match embedding model dimension " + expectedDimension);
+            }
+            float[][] textVectors = embeddingEngine.embed(searchableTexts);
+            if (textVectors.length != searchableTexts.size()) {
+                throw new IllegalArgumentException("Embedding model returned " + textVectors.length + " vectors for " + searchableTexts.size() + " texts");
+            }
+            for (int i = 0; i < textVectors.length; i++) {
+                if (textVectors[i].length != expectedDimension) {
+                    throw new IllegalArgumentException("Document vector at index " + i + " has dimension " + textVectors[i].length + " which does not match embedding model dimension " + expectedDimension);
+                }
+            }
+            List<RagSearchResult> allResults = vectorSearch.searchWithQuery(queryVector, searchableTexts, textVectors, topK);
             List<RagSearchResult> filtered = new ArrayList<>();
             for (RagSearchResult result : allResults) {
                 if (result.score >= threshold) {
@@ -137,22 +198,30 @@ public class LibsApi {
                 }
             }
             return filtered;
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("Search failed: " + e.getMessage(), e);
         }
     }
 
     private String doSyncChat(InferenceLane lane, List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+        validateMaxTokens(maxTokens);
         if (!chatEngine.hasQueueCapacity(lane)) {
             throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
         }
         List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
         InferenceTask task = InferenceTask.syncChat(lane, llamaMessages, sampler, maxTokens, 0, false);
         chatEngine.submitTask(task);
-        return task.getSyncFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        try {
+            return task.getSyncFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            chatEngine.cancelTask(task);
+            throw new Exception("Request timeout after " + requestTimeoutSeconds + " seconds");
+        }
     }
 
-    private CompletableFuture<String> doStreamChat(InferenceLane lane,
+    private StreamResult doStreamChat(InferenceLane lane,
                                                     List<ChatMessage> messages,
                                                     SamplerConfig sampler,
                                                     int maxTokens,
@@ -160,17 +229,21 @@ public class LibsApi {
                                                     boolean preemptible,
                                                     Consumer<String> tokenConsumer) {
         try {
+            validateMaxTokens(maxTokens);
+            if (tokenConsumer == null) {
+                throw new IllegalArgumentException("tokenConsumer is required");
+            }
             if (!chatEngine.hasQueueCapacity(lane)) {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
             InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer);
             chatEngine.submitTask(task);
-            return task.getSyncFuture();
+            return new StreamResult(task, cancellableFuture(task));
         } catch (Exception e) {
             CompletableFuture<String> failed = new CompletableFuture<>();
             failed.completeExceptionally(e);
-            return failed;
+            return new StreamResult(null, failed);
         }
     }
 
@@ -181,13 +254,14 @@ public class LibsApi {
                                                    int priority,
                                                    boolean preemptible) {
         try {
+            validateMaxTokens(maxTokens);
             if (!chatEngine.hasQueueCapacity(lane)) {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
             InferenceTask task = InferenceTask.syncChat(lane, llamaMessages, sampler, maxTokens, priority, preemptible);
             chatEngine.submitTask(task);
-            return task.getSyncFuture();
+            return cancellableFuture(task);
         } catch (Exception e) {
             CompletableFuture<String> failed = new CompletableFuture<>();
             failed.completeExceptionally(e);
@@ -195,13 +269,67 @@ public class LibsApi {
         }
     }
 
+    private CompletableFuture<String> cancellableFuture(InferenceTask task) {
+        CompletableFuture<String> exposed = new CompletableFuture<>();
+        task.getSyncFuture().whenComplete((result, error) -> {
+            if (error != null) {
+                exposed.completeExceptionally(error);
+            } else {
+                exposed.complete(result);
+            }
+        });
+        exposed.whenComplete((result, error) -> {
+            if (exposed.isCancelled() && !task.getSyncFuture().isDone()) {
+                chatEngine.cancelTask(task);
+            }
+        });
+        return exposed;
+    }
+
     private List<LlamaCppChatMessage> convertMessages(List<ChatMessage> messages) {
         List<LlamaCppChatMessage> result = new ArrayList<>();
-        if (messages == null) return result;
+        if (messages == null || messages.isEmpty()) {
+            throw new IllegalArgumentException("messages cannot be null or empty");
+        }
         for (ChatMessage msg : messages) {
             if (msg == null || msg.role == null || msg.content == null) continue;
-            result.add(new LlamaCppChatMessage(msg.role, msg.content));
+            String role = msg.role.trim().toLowerCase();
+            String content = msg.content.trim();
+            if (role.isEmpty() || content.isEmpty()) continue;
+            if (!isSupportedRole(role)) {
+                throw new IllegalArgumentException("unsupported message role: " + msg.role);
+            }
+            result.add(new LlamaCppChatMessage(role, content));
+        }
+        if (result.isEmpty()) {
+            throw new IllegalArgumentException("no valid messages after conversion");
         }
         return result;
+    }
+
+    private boolean isSupportedRole(String role) {
+        return "system".equals(role) || "user".equals(role) || "assistant".equals(role);
+    }
+
+    private List<String> filterSearchableTexts(List<String> texts) {
+        List<String> searchableTexts = new ArrayList<>();
+        for (String text : texts) {
+            if (text != null && !text.isBlank()) {
+                if (text.length() > MAX_EMBEDDING_TEXT_LENGTH) {
+                    throw new IllegalArgumentException("search text exceeds maximum length of " + MAX_EMBEDDING_TEXT_LENGTH + " characters");
+                }
+                searchableTexts.add(text);
+            }
+        }
+        if (searchableTexts.size() > MAX_EMBEDDING_BATCH_SIZE) {
+            throw new IllegalArgumentException("search text batch size exceeds maximum of " + MAX_EMBEDDING_BATCH_SIZE);
+        }
+        return searchableTexts;
+    }
+
+    private void validateMaxTokens(int maxTokens) {
+        if (maxTokens < 0) {
+            throw new IllegalArgumentException("maxTokens cannot be negative");
+        }
     }
 }

@@ -51,7 +51,7 @@ configurations {
 
 dependencies {
     // JJML 使用 JarJar 嵌套打包（满足 LGPL 要求）
-    jarJar files('libs/org.argeo.jjml-2.1.2.0006-7f18908.jar')
+    jarJar files('libs/org.argeo.jjml-2.1.2.0008-7201003.jar')
 
     // 其他依赖使用 Shadow 打包  
     shade files('libs/sherpa-onnx-v1.13.2.jar')
@@ -63,7 +63,6 @@ dependencies {
 
     compileOnly 'org.apache.commons:commons-compress:1.26.0'
     compileOnly 'it.unimi.dsi:fastutil:8.5.12'
-    compileOnly 'io.javalin:javalin:5.6.3'
     compileOnly 'com.google.code.gson:gson:2.10.1'
     compileOnly 'org.slf4j:slf4j-api:2.0.9'
 

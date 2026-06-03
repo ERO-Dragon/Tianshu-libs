@@ -1,5 +1,11 @@
 package com.rheinmetal.tianshu.libs.llm;
 
+import org.argeo.jjml.llm.util.ThinkingMode;
+
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 public class SamplerConfig {
     public Float temperature;
     public Integer topK;
@@ -10,6 +16,8 @@ public class SamplerConfig {
     public Float penaltyPresent;
     public Integer penaltyLastN;
     public Boolean enableThinking;
+    public ThinkingMode thinkingMode;
+    public Map<String, String> chatTemplateKwargs;
     public String grammarStr;
     public String grammarRoot;
 
@@ -22,12 +30,37 @@ public class SamplerConfig {
         this.penaltyFreq = 0.0f;
         this.penaltyPresent = 0.0f;
         this.penaltyLastN = 64;
-        this.enableThinking = false;
+        this.enableThinking = null;
+        this.thinkingMode = ThinkingMode.AUTO;
         this.grammarRoot = "root";
+    }
+
+    public SamplerConfig(SamplerConfig source) {
+        this();
+        if (source == null) return;
+        this.temperature = source.temperature;
+        this.topK = source.topK;
+        this.topP = source.topP;
+        this.minP = source.minP;
+        this.penaltyRepeat = source.penaltyRepeat;
+        this.penaltyFreq = source.penaltyFreq;
+        this.penaltyPresent = source.penaltyPresent;
+        this.penaltyLastN = source.penaltyLastN;
+        this.enableThinking = source.enableThinking;
+        this.thinkingMode = source.thinkingMode;
+        this.chatTemplateKwargs = source.chatTemplateKwargs == null
+                ? null
+                : new LinkedHashMap<>(source.chatTemplateKwargs);
+        this.grammarStr = source.grammarStr;
+        this.grammarRoot = source.grammarRoot;
     }
 
     public static SamplerConfig defaults() {
         return new SamplerConfig();
+    }
+
+    public SamplerConfig copy() {
+        return new SamplerConfig(this);
     }
 
     public Float getTemperature() { return temperature; }
@@ -54,8 +87,36 @@ public class SamplerConfig {
     public Integer getPenaltyLastN() { return penaltyLastN; }
     public void setPenaltyLastN(Integer penaltyLastN) { this.penaltyLastN = penaltyLastN; }
 
-    public Boolean getEnableThinking() { return enableThinking; }
-    public void setEnableThinking(Boolean enableThinking) { this.enableThinking = enableThinking; }
+    public Boolean getEnableThinking() {
+        return enableThinking;
+    }
+
+    public void setEnableThinking(Boolean enableThinking) {
+        this.enableThinking = enableThinking;
+    }
+
+    public ThinkingMode getThinkingMode() { return thinkingMode; }
+    public void setThinkingMode(ThinkingMode thinkingMode) {
+        this.enableThinking = null;
+        this.thinkingMode = thinkingMode;
+    }
+
+    public ThinkingMode getEffectiveThinkingMode() { return effectiveThinkingMode(); }
+
+    public Map<String, String> getChatTemplateKwargs() { return chatTemplateKwargs; }
+    public void setChatTemplateKwargs(Map<String, String> kwargs) { this.chatTemplateKwargs = kwargs; }
+
+    public SamplerConfig withKwargs(String key, String value) {
+        return chatTemplateKwarg(key, value);
+    }
+
+    public SamplerConfig chatTemplateKwarg(String key, String value) {
+        if (chatTemplateKwargs == null) {
+            chatTemplateKwargs = new LinkedHashMap<>();
+        }
+        chatTemplateKwargs.put(key, value);
+        return this;
+    }
 
     public String getGrammarStr() { return grammarStr; }
     public void setGrammarStr(String grammarStr) { this.grammarStr = grammarStr; }
@@ -73,5 +134,11 @@ public class SamplerConfig {
     float penaltyFreq() { return penaltyFreq != null ? penaltyFreq : 0.0f; }
     float penaltyPresent() { return penaltyPresent != null ? penaltyPresent : 0.0f; }
     int penaltyLastN() { return penaltyLastN != null ? penaltyLastN : 64; }
-    boolean enableThinking() { return Boolean.TRUE.equals(enableThinking); }
+    ThinkingMode effectiveThinkingMode() {
+        if (enableThinking != null) {
+            return enableThinking ? ThinkingMode.ENABLED : ThinkingMode.DISABLED;
+        }
+        return thinkingMode != null ? thinkingMode : ThinkingMode.AUTO;
+    }
+    Map<String, String> chatTemplateKwargs() { return chatTemplateKwargs != null ? chatTemplateKwargs : Collections.emptyMap(); }
 }

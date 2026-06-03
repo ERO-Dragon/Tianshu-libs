@@ -128,7 +128,7 @@ public final class NativeLibraryLoader {
         Files.createDirectories(targetDir);
 
         LOGGER.info("Extracting {} native libraries to: {}", loadableLibs.size(), targetDir);
-        for (NativeLib lib : allLibs) {
+        for (NativeLib lib : loadableLibs) {
             Path target = targetDir.resolve(lib.targetName);
             extractResource(lib.resourcePath, target);
         }
@@ -140,8 +140,10 @@ public final class NativeLibraryLoader {
     private static List<NativeLib> filterLoadableLibs(List<NativeLib> libs) {
         List<NativeLib> loadable = new ArrayList<>();
         for (NativeLib lib : libs) {
-            if (openResource(lib.resourcePath) != null) {
+            try (InputStream in = openResource(lib.resourcePath)) {
+                if (in == null) continue;
                 loadable.add(lib);
+            } catch (IOException ignored) {
             }
         }
         return loadable;

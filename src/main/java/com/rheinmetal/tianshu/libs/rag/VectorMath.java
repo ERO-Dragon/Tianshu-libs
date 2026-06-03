@@ -21,9 +21,11 @@ public final class VectorMath {
 
     public static double dot(float[] a, float[] b) {
         if (a == null || b == null || a.length == 0 || b.length == 0) return 0.0;
-        int length = Math.min(a.length, b.length);
+        if (a.length != b.length) {
+            throw new IllegalArgumentException("Vector dimension mismatch: a.length=" + a.length + ", b.length=" + b.length);
+        }
         double score = 0.0;
-        for (int i = 0; i < length; i++) {
+        for (int i = 0; i < a.length; i++) {
             score += a[i] * b[i];
         }
         return score;

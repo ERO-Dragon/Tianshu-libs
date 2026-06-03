@@ -10,13 +10,11 @@ import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
 import com.rheinmetal.tianshu.libs.llm.SamplerConfig;
 import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
 import com.rheinmetal.tianshu.libs.rag.RagSearchResult;
-import com.rheinmetal.tianshu.libs.web.ChatController;
-import com.rheinmetal.tianshu.libs.web.ChatController.ChatRequest;
+import org.argeo.jjml.llm.util.ThinkingMode;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -29,7 +27,6 @@ public class JavaLlamaServer {
     private final AtomicBoolean started = new AtomicBoolean(false);
     private volatile ModelRegistry models;
     private volatile LibsApi libsApi;
-    private volatile ChatController chatController;
 
     private JavaLlamaServer(ServerConfig config) {
         this.config = copyConfig(config);
@@ -49,9 +46,9 @@ public class JavaLlamaServer {
         ModelRegistry localModels = null;
         LibsApi localLibsApi = null;
         try {
-            String alias = config.alias;
-            if (alias == null || alias.isBlank() || alias.equals("unknown")) {
-                alias = ServerApp.extractFileName(config.modelPath);
+            String modelAlias = config.modelAlias;
+            if (modelAlias == null || modelAlias.isBlank() || modelAlias.equals("unknown")) {
+                modelAlias = extractFileName(config.modelPath);
             }
 
             LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.chatContext, config.chatThreads, config.chatMaxQueueSize);
@@ -61,7 +58,7 @@ public class JavaLlamaServer {
                     chatLaneConfig,
                     taskLaneConfig,
                     config.gpuLayers,
-                    alias,
+                    modelAlias,
                     config.modelProfile,
                     config.cacheTypeK,
                     config.cacheTypeV,
@@ -71,7 +68,7 @@ public class JavaLlamaServer {
             if (config.embeddingModelPath != null && !config.embeddingModelPath.isBlank()) {
                 String embeddingAlias = config.embeddingAlias;
                 if (embeddingAlias == null || embeddingAlias.isBlank() || embeddingAlias.equals("embedding")) {
-                    embeddingAlias = ServerApp.extractFileName(config.embeddingModelPath);
+                    embeddingAlias = extractFileName(config.embeddingModelPath);
                 }
                 embeddingEngine = EmbeddingEngine.load(
                         config.embeddingModelPath,
@@ -85,11 +82,8 @@ public class JavaLlamaServer {
             localModels = new ModelRegistry(engine, embeddingEngine);
             localLibsApi = new LibsApi(engine, embeddingEngine, config.requestTimeoutSeconds);
 
-            ChatController localChatController = new ChatController(localModels.getChatEngine(), embeddingEngine, config.requestTimeoutSeconds);
-
             this.models = localModels;
             this.libsApi = localLibsApi;
-            this.chatController = localChatController;
         } catch (Exception e) {
             try {
                 if (localModels != null) {
@@ -109,7 +103,6 @@ public class JavaLlamaServer {
         ModelRegistry currentModels = this.models;
         this.models = null;
         this.libsApi = null;
-        this.chatController = null;
         if (currentModels != null) {
             try {
                 currentModels.shutdown();
@@ -121,6 +114,12 @@ public class JavaLlamaServer {
 
     public String chat(String message, String systemPrompt) throws Exception {
         return chat(toMessages(message, systemPrompt));
+    }
+
+    public String chat(String message, String systemPrompt, ThinkingMode thinkingMode) throws Exception {
+        SamplerConfig sampler = new SamplerConfig();
+        sampler.setThinkingMode(thinkingMode);
+        return chat(toMessages(message, systemPrompt), sampler, 0);
     }
 
     public String chat(List<ChatMessage> messages) throws Exception {
@@ -177,6 +176,11 @@ public class JavaLlamaServer {
         return api != null && api.isReady();
     }
 
+    public boolean supportsEnableThinking() {
+        ModelRegistry current = models;
+        return current != null && current.supportsEnableThinking();
+    }
+
     public boolean hasChatQueueCapacity() {
         LibsApi api = libsApi;
         return api != null && api.hasChatQueueCapacity();
@@ -194,10 +198,6 @@ public class JavaLlamaServer {
     public int getChatQueueSize() {
         ModelRegistry current = models;
         return current == null ? 0 : current.getChatEngine().getChatQueueSize();
-    }
-
-    public ChatController getChatController() {
-        return chatController;
     }
 
     private LibsApi requireLibsApi() {
@@ -220,15 +220,19 @@ public class JavaLlamaServer {
         return messages;
     }
 
+    private static String extractFileName(String path) {
+        if (path == null || path.isBlank()) return "unknown";
+        int lastSlash = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
+        return lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+    }
+
     private static ServerConfig copyConfig(ServerConfig source) {
         ServerConfig copy = new ServerConfig();
         copy.modelPath = source.modelPath;
-        copy.port = source.port;
-        copy.host = source.host;
         copy.contextSize = source.contextSize;
         copy.threads = source.threads;
         copy.gpuLayers = source.gpuLayers;
-        copy.alias = source.alias;
+        copy.modelAlias = source.modelAlias;
         copy.modelProfile = source.modelProfile;
         copy.embeddingModelPath = source.embeddingModelPath;
         copy.embeddingContextSize = source.embeddingContextSize;
@@ -246,7 +250,6 @@ public class JavaLlamaServer {
         copy.cacheTypeK = source.cacheTypeK;
         copy.cacheTypeV = source.cacheTypeV;
         copy.requestTimeoutSeconds = source.requestTimeoutSeconds;
-        copy.help = source.help;
         return copy;
     }
 
@@ -254,7 +257,7 @@ public class JavaLlamaServer {
         private final ServerConfig config = new ServerConfig();
         private boolean taskContextExplicit;
 
-        public Builder chatModel(String path) {
+        public Builder model(String path) {
             config.modelPath = path;
             return this;
         }
@@ -283,7 +286,7 @@ public class JavaLlamaServer {
         }
 
         public Builder modelAlias(String name) {
-            config.alias = name;
+            config.modelAlias = name;
             return this;
         }
 
@@ -307,7 +310,7 @@ public class JavaLlamaServer {
             return this;
         }
 
-        public Builder embeddingContext(int n) {
+        public Builder embeddingContextSize(int n) {
             config.embeddingContextSize = n;
             return this;
         }

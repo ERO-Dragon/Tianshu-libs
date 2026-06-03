@@ -93,16 +93,23 @@ public class EmbeddingEngine {
         running = false;
         System.out.println("[EmbeddingEngine] Shutting down...");
         embeddingExecutor.shutdown();
+        boolean terminated = false;
         try {
-            if (!embeddingExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+            terminated = embeddingExecutor.awaitTermination(30, TimeUnit.SECONDS);
+            if (!terminated) {
                 embeddingExecutor.shutdownNow();
+                terminated = embeddingExecutor.awaitTermination(5, TimeUnit.SECONDS);
             }
         } catch (InterruptedException e) {
             embeddingExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        try { model.close(); } catch (Exception ignored) {}
-        System.out.println("[EmbeddingEngine] Shutdown complete.");
+        if (terminated) {
+            try { model.close(); } catch (Exception ignored) {}
+            System.out.println("[EmbeddingEngine] Shutdown complete.");
+        } else {
+            System.err.println("[EmbeddingEngine] Worker did not stop; model close skipped to avoid native use-after-close.");
+        }
     }
 
     public boolean isModelLoaded() { return model != null; }

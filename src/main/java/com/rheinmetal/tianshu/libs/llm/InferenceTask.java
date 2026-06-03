@@ -5,6 +5,7 @@ import org.argeo.jjml.llm.LlamaCppChatMessage;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 public class InferenceTask {
@@ -27,6 +28,7 @@ public class InferenceTask {
     private final Consumer<String> streamCallback;
     private final CompletableFuture<String> syncFuture;
     private volatile boolean cancelled = false;
+    private final AtomicBoolean taskLaneSlotReleased = new AtomicBoolean(false);
 
     public InferenceTask(TaskType taskType,
                          InferenceLane lane,
@@ -42,7 +44,7 @@ public class InferenceTask {
         this.taskType = taskType;
         this.lane = lane;
         this.messages = messages;
-        this.samplerConfig = samplerConfig != null ? samplerConfig : new SamplerConfig();
+        this.samplerConfig = samplerConfig != null ? samplerConfig.copy() : new SamplerConfig();
         this.maxTokens = maxTokens;
         this.taskPriority = taskPriority;
         this.taskPreemptible = taskPreemptible;
@@ -123,4 +125,5 @@ public class InferenceTask {
     public CompletableFuture<String> getSyncFuture() { return syncFuture; }
     public boolean isCancelled() { return cancelled; }
     public void cancel() { this.cancelled = true; }
+    boolean releaseTaskLaneSlotOnce() { return taskLaneSlotReleased.compareAndSet(false, true); }
 }

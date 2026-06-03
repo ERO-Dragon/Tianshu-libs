@@ -34,13 +34,14 @@ public class LlamaEngine {
 
     private final LinkedBlockingQueue<InferenceTask> chatQueue;
     private final PriorityBlockingQueue<PrioritizedInferenceTask> taskQueue;
-    private final AtomicInteger queuedTaskTasks = new AtomicInteger(0);
     private final AtomicInteger pendingChatTasks = new AtomicInteger(0);
+    private final AtomicInteger acceptedTaskCount = new AtomicInteger(0);
     private final ExecutorService inferenceExecutor;
     private final Object taskArrivalLock = new Object();
     private volatile boolean hasPendingTasks = false;
     private volatile boolean running = true;
     private volatile InferenceLane currentLane;
+    private volatile InferenceTask currentTask;
     private volatile boolean taskSuspended;
 
     static {
@@ -162,13 +163,19 @@ public class LlamaEngine {
             notifyTaskArrival();
             return;
         }
-        if (queuedTaskTasks.get() >= taskLaneConfig.getMaxQueueSize()) {
-            throw new RejectedExecutionException("task inference queue is full");
-        }
-        queuedTaskTasks.incrementAndGet();
+        
+        int maxQueueSize = taskLaneConfig.getMaxQueueSize();
+        int current;
+        do {
+            current = acceptedTaskCount.get();
+            if (current >= maxQueueSize) {
+                throw new RejectedExecutionException("task inference queue is full");
+            }
+        } while (!acceptedTaskCount.compareAndSet(current, current + 1));
+        
         boolean accepted = taskQueue.offer(new PrioritizedInferenceTask(task));
         if (!accepted) {
-            queuedTaskTasks.decrementAndGet();
+            finishTask(task);
             throw new RejectedExecutionException("task inference queue is full");
         }
         notifyTaskArrival();
@@ -183,7 +190,6 @@ public class LlamaEngine {
     InferenceTask pollTaskTask() {
         PrioritizedInferenceTask prioritizedTask = taskQueue.poll();
         if (prioritizedTask == null) return null;
-        queuedTaskTasks.decrementAndGet();
         return prioritizedTask.getTask();
     }
 
@@ -191,12 +197,41 @@ public class LlamaEngine {
         if (task == null) return;
         if (task.getLane() == InferenceLane.CHAT) {
             pendingChatTasks.incrementAndGet();
-            chatQueue.offer(task);
+            boolean accepted = chatQueue.offer(task);
+            if (!accepted) {
+                pendingChatTasks.decrementAndGet();
+                task.cancel();
+                task.getSyncFuture().completeExceptionally(new RejectedExecutionException("chat inference queue is full"));
+                return;
+            }
         } else {
-            queuedTaskTasks.incrementAndGet();
             taskQueue.offer(new PrioritizedInferenceTask(task));
         }
         notifyTaskArrival();
+    }
+
+    public void cancelTask(InferenceTask task) {
+        if (task == null) return;
+        task.cancel();
+        if (task.getLane() == InferenceLane.CHAT) {
+            if (chatQueue.remove(task)) {
+                pendingChatTasks.decrementAndGet();
+                task.getSyncFuture().cancel(false);
+            }
+            return;
+        }
+        boolean removed = taskQueue.removeIf(queued -> queued.wraps(task));
+        if (removed) {
+            task.getSyncFuture().cancel(false);
+            finishTask(task);
+        }
+    }
+
+    void finishTask(InferenceTask task) {
+        if (task == null || task.getLane() != InferenceLane.TASK) return;
+        if (task.releaseTaskLaneSlotOnce()) {
+            acceptedTaskCount.decrementAndGet();
+        }
     }
 
     void notifyTaskArrival() {
@@ -238,6 +273,10 @@ public class LlamaEngine {
         currentLane = lane;
     }
 
+    void setCurrentTask(InferenceTask task) {
+        currentTask = task;
+    }
+
     void setTaskSuspended(boolean taskSuspended) {
         this.taskSuspended = taskSuspended;
     }
@@ -266,35 +305,73 @@ public class LlamaEngine {
     public boolean isTaskSuspendOnChat() { return taskSuspendOnChat; }
     public boolean isRunning() { return running; }
 
+    public boolean supportsEnableThinking() {
+        return model.supportsEnableThinking();
+    }
+
     public void shutdown() {
         if (!running) return;
         running = false;
+        InferenceTask active = currentTask;
+        if (active != null) {
+            active.cancel();
+            active.getSyncFuture().cancel(false);
+            finishTask(active);
+        }
+        cancelQueuedTasks();
         notifyTaskArrival();
         System.out.println("[LlamaEngine:" + engineName + "] Shutting down...");
         inferenceExecutor.shutdown();
+        boolean terminated = false;
         try {
-            if (!inferenceExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+            terminated = inferenceExecutor.awaitTermination(30, TimeUnit.SECONDS);
+            if (!terminated) {
                 inferenceExecutor.shutdownNow();
+                terminated = inferenceExecutor.awaitTermination(5, TimeUnit.SECONDS);
             }
         } catch (InterruptedException e) {
             inferenceExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        try { model.close(); } catch (Exception ignored) {}
-        System.out.println("[LlamaEngine:" + engineName + "] Shutdown complete.");
+        if (terminated) {
+            try { model.close(); } catch (Exception ignored) {}
+            System.out.println("[LlamaEngine:" + engineName + "] Shutdown complete.");
+        } else {
+            System.err.println("[LlamaEngine:" + engineName + "] Worker did not stop; model close skipped to avoid native use-after-close.");
+        }
+    }
+
+    private void cancelQueuedTasks() {
+        InferenceTask chatTask;
+        while ((chatTask = chatQueue.poll()) != null) {
+            pendingChatTasks.decrementAndGet();
+            chatTask.cancel();
+            chatTask.getSyncFuture().cancel(false);
+        }
+
+        PrioritizedInferenceTask taskTask;
+        while ((taskTask = taskQueue.poll()) != null) {
+            InferenceTask task = taskTask.getTask();
+            task.cancel();
+            task.getSyncFuture().cancel(false);
+            finishTask(task);
+        }
     }
 
     public int getQueueSize() { return getChatQueueSize(); }
     public int getMaxQueueSize() { return chatLaneConfig.getMaxQueueSize(); }
     public boolean hasQueueCapacity() { return hasQueueCapacity(InferenceLane.CHAT); }
     public int getChatQueueSize() { return chatQueue.size(); }
-    public int getTaskQueueSize() { return queuedTaskTasks.get(); }
+    public int getTaskLoad() { return acceptedTaskCount.get(); }
+    public int getTaskQueueSize() { return getTaskLoad(); }
     public boolean hasQueueCapacity(InferenceLane lane) {
-        return lane == InferenceLane.TASK ? queuedTaskTasks.get() < taskLaneConfig.getMaxQueueSize() : chatQueue.remainingCapacity() > 0;
+        return lane == InferenceLane.TASK 
+            ? acceptedTaskCount.get() < taskLaneConfig.getMaxQueueSize() 
+            : chatQueue.remainingCapacity() > 0;
     }
 
     public LaneMetrics getLaneMetrics() {
-        return new LaneMetrics(chatQueue.size(), chatLaneConfig.getMaxQueueSize(), queuedTaskTasks.get(), taskLaneConfig.getMaxQueueSize(), currentLane, taskSuspended);
+        return new LaneMetrics(chatQueue.size(), chatLaneConfig.getMaxQueueSize(), acceptedTaskCount.get(), taskLaneConfig.getMaxQueueSize(), currentLane, taskSuspended);
     }
 
     public boolean isModelLoaded() { return model != null; }
