@@ -54,20 +54,25 @@ def generateNativeManifest = tasks.register('generateNativeManifest') {
 
 def generateExternalNativeManifest = tasks.register('generateExternalNativeManifest') {
     inputs.files configurations.externalNativeManifest
+    def excludedNativeManifestEntries = [
+            'ai/onnxruntime/native/win-x64/onnxruntime.dll'
+    ] as Set
     def outDir = layout.buildDirectory.dir('generated/resources/META-INF')
     outputs.dir outDir
-    doLast {
+    doLast { task ->
         outDir.get().asFile.mkdirs()
         def externalDlls = []
-        configurations.externalNativeManifest.files.each { dep ->
+        task.inputs.files.files.each { dep ->
             if (!dep.isFile() || !dep.name.toLowerCase().endsWith('.jar')) return
             if (dep.name.contains('onnxruntime') || dep.name.contains('sherpa')) {
                 try {
                     def zip = new java.util.zip.ZipFile(dep)
                     try {
                         zip.entries().each { entry ->
-                            if (!entry.directory && entry.name.toLowerCase().endsWith('.dll')
-                                    && (entry.name.contains('win-x64') || entry.name.contains('win64'))) {
+                            def entryName = entry.name.toLowerCase()
+                            if (!entry.directory && entryName.endsWith('.dll')
+                                    && (entryName.contains('win-x64') || entryName.contains('win64'))
+                                    && !excludedNativeManifestEntries.contains(entryName)) {
                                 externalDlls << entry.name
                             }
                         }

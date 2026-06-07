@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -12,7 +13,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,6 +27,15 @@ public final class NativeLibraryLoader {
     private static final String EXTERNAL_MANIFEST = "META-INF/native-libs.txt";
     private static final String TEMP_DIR_NAME = "javallamaserver-natives";
     private static final Duration STALE_DIR_TTL = Duration.ofDays(7);
+    private static final List<String> JJML_ENTRYPOINT_LIBRARIES = List.of(
+            "ggml.dll",
+            "llama.dll",
+            "whisper.dll",
+            "Java_org_argeo_jjml_ggml.dll",
+            "Java_org_argeo_jjml_llm.dll",
+            "Java_org_argeo_jjml_mtmd.dll",
+            "Java_org_argeo_jjml_whisper.dll"
+    );
 
     private static final AtomicBoolean LOADED = new AtomicBoolean(false);
     private static final Object LOCK = new Object();
@@ -40,14 +49,15 @@ public final class NativeLibraryLoader {
         synchronized (LOCK) {
             if (LOADED.get()) return;
             try {
-                Path nativeDir = prepareNativeDirectory();
-                loadAllNativeLibraries(nativeDir);
+                NativeLoadPlan loadPlan = createNativeLoadPlan();
+                Path nativeDir = prepareNativeDirectory(loadPlan.allLibraries);
                 configureJjmlPaths(nativeDir);
+                preloadNativeDependencies(nativeDir, loadPlan.preloadLibraries);
                 loadedDirectory = nativeDir;
                 LOADED.set(true);
                 LOGGER.info("All native libraries loaded successfully");
                 printLoadReport();
-            } catch (Exception e) {
+            } catch (Exception | LinkageError e) {
                 throw new IllegalStateException("Failed to load native libraries", e);
             }
         }
@@ -63,15 +73,22 @@ public final class NativeLibraryLoader {
 
     private static String verifyJjml() {
         try {
-            String ggmlPath = System.getProperty("org.argeo.jjml.llm.ggml.libpath");
-            String llamaPath = System.getProperty("org.argeo.jjml.llm.llama.libpath");
-            if (ggmlPath != null && llamaPath != null && Files.isRegularFile(Path.of(ggmlPath)) && Files.isRegularFile(Path.of(llamaPath))) {
+            String ggmlPath = System.getProperty("jjml.libpath.ggml");
+            String llamaPath = System.getProperty("jjml.libpath.llamacpp");
+            String jjmlGgmlPath = System.getProperty("jjml.libpath.jjml.ggml");
+            String jjmlLlmPath = System.getProperty("jjml.libpath.jjml.llm");
+            if (isRegularFile(ggmlPath) && isRegularFile(llamaPath)
+                    && isRegularFile(jjmlGgmlPath) && isRegularFile(jjmlLlmPath)) {
                 return "OK";
             }
             return "FAILED - paths not configured";
         } catch (Exception e) {
             return "FAILED - " + e.getMessage();
         }
+    }
+
+    private static boolean isRegularFile(String path) {
+        return path != null && Files.isRegularFile(Path.of(path));
     }
 
     private static String verifySherpaOnnx() {
@@ -100,9 +117,41 @@ public final class NativeLibraryLoader {
         return loadedDirectory;
     }
 
-    private static Path prepareNativeDirectory() throws Exception {
+    private static NativeLoadPlan createNativeLoadPlan() throws IOException {
         List<NativeLib> allLibs = collectAllNativeLibs();
         List<NativeLib> loadableLibs = filterLoadableLibs(allLibs);
+        validateUniqueTargetNames(loadableLibs);
+
+        List<NativeLib> preloadLibs = new ArrayList<>();
+        List<NativeLib> jjmlManagedLibs = new ArrayList<>();
+        for (NativeLib lib : loadableLibs) {
+            if (isManagedByJjml(lib)) {
+                jjmlManagedLibs.add(lib);
+            } else {
+                preloadLibs.add(lib);
+            }
+        }
+
+        LOGGER.debug("Native load plan: {} total, {} preloaded, {} managed by JJML",
+                loadableLibs.size(), preloadLibs.size(), jjmlManagedLibs.size());
+        return new NativeLoadPlan(loadableLibs, preloadLibs, jjmlManagedLibs);
+    }
+
+    private static void validateUniqueTargetNames(List<NativeLib> libs) {
+        for (int i = 0; i < libs.size(); i++) {
+            NativeLib current = libs.get(i);
+            for (int j = i + 1; j < libs.size(); j++) {
+                NativeLib other = libs.get(j);
+                if (current.targetName.equalsIgnoreCase(other.targetName)) {
+                    throw new IllegalStateException("Native library name collision: "
+                            + current.targetName + " from " + current.resourcePath
+                            + " and " + other.resourcePath);
+                }
+            }
+        }
+    }
+
+    private static Path prepareNativeDirectory(List<NativeLib> loadableLibs) throws Exception {
 
         if (loadableLibs.isEmpty()) {
             throw new IllegalStateException("No native libraries found to load");
@@ -202,20 +251,23 @@ public final class NativeLibraryLoader {
         return LibSource.OTHER;
     }
 
-    private static void loadAllNativeLibraries(Path nativeDir) throws IOException {
+    private static void preloadNativeDependencies(Path nativeDir, List<NativeLib> preloadLibs) {
         System.setProperty("onnxruntime.native.path", nativeDir.toAbsolutePath().toString());
 
-        List<NativeLib> allLibs = collectAllNativeLibs();
-        List<NativeLib> loadableLibs = filterLoadableLibs(allLibs);
+        preloadLibs.sort(Comparator.comparingInt(NativeLibraryLoader::computeLoadPriority));
 
-        loadableLibs.sort(Comparator.comparingInt(NativeLibraryLoader::computeLoadPriority));
-
-        LOGGER.info("Loading {} native libraries", loadableLibs.size());
-        for (NativeLib lib : loadableLibs) {
+        LOGGER.info("Preloading {} native dependency libraries", preloadLibs.size());
+        for (NativeLib lib : preloadLibs) {
             Path libPath = nativeDir.resolve(lib.targetName);
             if (Files.isRegularFile(libPath)) {
-                LOGGER.debug("Loading: {} ({})", lib.targetName, lib.source);
-                System.load(libPath.toAbsolutePath().toString());
+                LOGGER.debug("Preloading: {} ({})", lib.targetName, lib.source);
+                try {
+                    System.load(libPath.toAbsolutePath().toString());
+                } catch (UnsatisfiedLinkError e) {
+                    throw new UnsatisfiedLinkError("Failed to preload native dependency "
+                            + lib.targetName + " from " + libPath.toAbsolutePath()
+                            + " (" + lib.source + "): " + e.getMessage());
+                }
             } else {
                 LOGGER.warn("Native library not found: {}", libPath);
             }
@@ -228,20 +280,64 @@ public final class NativeLibraryLoader {
         Path jjmlGgml = requiredLibrary(nativeDir, "Java_org_argeo_jjml_ggml.dll");
         Path jjmlLlm = requiredLibrary(nativeDir, "Java_org_argeo_jjml_llm.dll");
 
+        System.setProperty("jjml.libpath.ggml", ggml.toAbsolutePath().toString());
+        System.setProperty("jjml.libpath.llamacpp", llama.toAbsolutePath().toString());
+        System.setProperty("jjml.libpath.jjml.ggml", jjmlGgml.toAbsolutePath().toString());
+        System.setProperty("jjml.libpath.jjml.llm", jjmlLlm.toAbsolutePath().toString());
+        prependJavaLibraryPath(nativeDir);
+
+        // Keep the older internal names for compatibility with callers that inspect them.
         System.setProperty("org.argeo.jjml.llm.ggml.libpath", ggml.toAbsolutePath().toString());
         System.setProperty("org.argeo.jjml.llm.llama.libpath", llama.toAbsolutePath().toString());
         System.setProperty("org.argeo.jjml.llm.jjml.ggml.libpath", jjmlGgml.toAbsolutePath().toString());
         System.setProperty("org.argeo.jjml.llm.jjml.llm.libpath", jjmlLlm.toAbsolutePath().toString());
     }
 
+    private static boolean isManagedByJjml(NativeLib lib) {
+        if (lib.source != LibSource.JJML) return false;
+        if (isJjmlBackendPlugin(lib.targetName)) return true;
+        for (String libraryName : JJML_ENTRYPOINT_LIBRARIES) {
+            if (libraryName.equalsIgnoreCase(lib.targetName)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isJjmlBackendPlugin(String fileName) {
+        String lower = fileName.toLowerCase();
+        return lower.startsWith("ggml-cpu-")
+                || lower.startsWith("ggml-cuda")
+                || lower.startsWith("ggml-hip")
+                || lower.startsWith("ggml-blas")
+                || lower.startsWith("ggml-rpc")
+                || lower.startsWith("ggml-cann")
+                || lower.startsWith("ggml-metal")
+                || lower.startsWith("ggml-sycl")
+                || lower.startsWith("ggml-opencl")
+                || lower.startsWith("ggml-musa")
+                || lower.equals("ggml-vulkan.dll");
+    }
+
+    private static void prependJavaLibraryPath(Path nativeDir) {
+        String nativeDirPath = nativeDir.toAbsolutePath().toString();
+        String currentPath = System.getProperty("java.library.path", "");
+        for (String entry : currentPath.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            if (nativeDirPath.equals(entry)) return;
+        }
+        String updatedPath = currentPath.isBlank()
+                ? nativeDirPath
+                : nativeDirPath + File.pathSeparator + currentPath;
+        System.setProperty("java.library.path", updatedPath);
+    }
+
     private static int computeLoadPriority(NativeLib lib) {
-        String resource = lib.resourcePath.toLowerCase();
-        if (resource.contains("sherpa")) return 1;
-        if (resource.contains("onnxruntime")) return 15;
+        if (lib.source == LibSource.JJML) return 1;
+        if (lib.source == LibSource.SHERPA_ORT) return 10;
+        if (lib.source == LibSource.ORT_PROVIDERS) return 20;
+        if (lib.source == LibSource.ORT_JNI) return 30;
+        if (lib.source == LibSource.SHERPA_JNI) return 40;
         String name = lib.targetName.toLowerCase();
-        if (name.startsWith("ggml")) return 25;
-        if (name.startsWith("llama") || name.startsWith("whisper")) return 25;
-        if (name.startsWith("java_")) return 30;
+        if (name.contains("onnxruntime")) return 15;
+        if (name.endsWith("-jni.dll")) return 50;
         return 100;
     }
 
@@ -346,6 +442,19 @@ public final class NativeLibraryLoader {
         SHERPA_JNI,
         SHERPA_ORT,
         OTHER
+    }
+
+    private static class NativeLoadPlan {
+        final List<NativeLib> allLibraries;
+        final List<NativeLib> preloadLibraries;
+        final List<NativeLib> jjmlManagedLibraries;
+
+        NativeLoadPlan(List<NativeLib> allLibraries, List<NativeLib> preloadLibraries,
+                       List<NativeLib> jjmlManagedLibraries) {
+            this.allLibraries = allLibraries;
+            this.preloadLibraries = preloadLibraries;
+            this.jjmlManagedLibraries = jjmlManagedLibraries;
+        }
     }
 
     private static class NativeLib {

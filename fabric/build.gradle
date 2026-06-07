@@ -37,23 +37,26 @@ dependencies {
 def generatedResourcesDir = layout.buildDirectory.dir('generated/resources')
 def nestedJarsDir = generatedResourcesDir.map { it.dir('META-INF/jars') }
 def fabricJjmlMetadataDir = layout.buildDirectory.dir('generated/fabric-jjml-metadata')
+def jjmlVersion = jjml_version
+def minimumFabricLoaderVersion = '>=0.15.6'
 
 def generateFabricJjmlMetadata = tasks.register('generateFabricJjmlMetadata') {
-    inputs.property 'jjml_version', jjml_version
+    inputs.property 'jjml_version', jjmlVersion
+    inputs.property 'minimum_fabric_loader_version', minimumFabricLoaderVersion
     outputs.file fabricJjmlMetadataDir.map { it.file('fabric.mod.json') }
 
     doLast {
         def metadata = [
                 schemaVersion: 1,
                 id           : 'tianshu_libs_jjml',
-                version      : jjml_version,
+                version      : jjmlVersion,
                 name         : 'Tianshu Libraries JJML',
                 description  : 'Nested JJML dependency for Tianshu Libraries.',
                 license      : 'LGPL-2.1-only',
                 environment  : '*',
                 depends      : [
-                        fabricloader: '>=0.16.0',
-                        java        : '>=21'
+                        fabricloader: minimumFabricLoaderVersion,
+                        java        : '>=17'
                 ]
         ]
 
@@ -78,12 +81,17 @@ def copyNestedJars = tasks.register('copyNestedJars', Sync) {
     into nestedJarsDir
 }
 
+def fabricMetadataProperties = [
+        minecraft_version: fabric_minecraft_version_range,
+        mod_id           : mod_id,
+        mod_name         : mod_name,
+        mod_license      : mod_license,
+        mod_version      : mod_version,
+        fabricloader     : minimumFabricLoaderVersion,
+]
+
 def generateFabricMetadata = tasks.register('generateFabricMetadata') {
-    inputs.property 'minecraft_version', minecraft_version
-    inputs.property 'mod_id', mod_id
-    inputs.property 'mod_name', mod_name
-    inputs.property 'mod_license', mod_license
-    inputs.property 'mod_version', mod_version
+    inputs.properties fabricMetadataProperties
     inputs.file packageFabricJjmlJar.flatMap { it.archiveFile }
     outputs.file generatedResourcesDir.map { it.file('fabric.mod.json') }
 
@@ -92,20 +100,20 @@ def generateFabricMetadata = tasks.register('generateFabricMetadata') {
 
         def metadata = [
                 schemaVersion: 1,
-                id           : mod_id,
-                version      : mod_version,
-                name         : mod_name,
+                id           : fabricMetadataProperties.mod_id,
+                version      : fabricMetadataProperties.mod_version,
+                name         : fabricMetadataProperties.mod_name,
                 description  : 'Native AI inference library for Tianshu mod. Bundles llama.cpp (jjml), ONNX Runtime, Sherpa-ONNX, and SentencePiece.',
-                license      : mod_license,
+                license      : fabricMetadataProperties.mod_license,
                 environment  : 'client',
                 entrypoints  : [
                         main: ['com.rheinmetal.TianshuLibsFabricMod']
                 ],
                 jars         : nestedJars,
                 depends      : [
-                        fabricloader: '>=0.16.0',
-                        minecraft   : minecraft_version,
-                        java        : '>=21'
+                        fabricloader: fabricMetadataProperties.fabricloader,
+                        minecraft   : fabricMetadataProperties.minecraft_version,
+                        java        : '>=17'
                 ]
         ]
 
@@ -140,6 +148,8 @@ shadowJar {
     exclude 'META-INF/*.RSA'
     exclude 'META-INF/maven/**'
     exclude 'OSGI-INF/**'
+    exclude 'GIT_COMMIT_ID'
+    exclude 'Privacy.md'
     exclude 'it/unimi/dsi/fastutil/**'
     exclude 'ai/onnxruntime/native/linux-aarch64/**'
     exclude 'ai/onnxruntime/native/linux-x64/**'

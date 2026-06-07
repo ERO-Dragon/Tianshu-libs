@@ -13,6 +13,10 @@ def jjmlJar = libsDir.file("org.argeo.jjml-${jjml_version}.jar")
 def sherpaJar = libsDir.file("sherpa-onnx-v${sherpa_onnx_version}.jar")
 def sherpaNativeJar = libsDir.file("sherpa-onnx-native-lib-win-x64-v${sherpa_onnx_version}.jar")
 
+sourceSets {
+    forgeCompatStubs
+}
+
 neoForge {
     version = project.neo_version
 
@@ -47,6 +51,7 @@ configurations {
 
 dependencies {
     implementation project(':common')
+    compileOnly sourceSets.forgeCompatStubs.output
 
     // Keep JJML as a nested dependency jar for LGPL compliance.
     jarJar files(jjmlJar)
@@ -58,7 +63,6 @@ dependencies {
     shade "com.google.protobuf:protobuf-java:${protobuf_version}"
     shade "com.belerweb:pinyin4j:${pinyin4j_version}"
 
-    compileOnly "org.apache.commons:commons-compress:${commons_compress_version}"
     compileOnly "it.unimi.dsi:fastutil:${fastutil_version}"
     compileOnly "com.google.code.gson:gson:${gson_version}"
     compileOnly "org.slf4j:slf4j-api:${slf4j_version}"
@@ -66,14 +70,18 @@ dependencies {
 
 def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
     def replaceProperties = [
-            minecraft_version      : minecraft_version,
-            minecraft_version_range: minecraft_version_range,
-            neo_version            : neo_version,
-            loader_version_range   : loader_version_range,
-            mod_id                 : mod_id,
-            mod_name               : mod_name,
-            mod_license            : mod_license,
-            mod_version            : mod_version,
+            minecraft_version                  : minecraft_version,
+            minecraft_version_range            : minecraft_version_range,
+            neo_version                        : neo_version,
+            neo_version_range                  : neo_version_range,
+            forge_legacy_loader_version_range  : forge_legacy_loader_version_range,
+            forge_legacy_version_range         : forge_legacy_version_range,
+            forge_legacy_minecraft_version_range: forge_legacy_minecraft_version_range,
+            loader_version_range               : loader_version_range,
+            mod_id                             : mod_id,
+            mod_name                           : mod_name,
+            mod_license                        : mod_license,
+            mod_version                        : mod_version,
     ]
     inputs.properties replaceProperties
     expand replaceProperties
@@ -86,6 +94,10 @@ neoForge.ideSyncTask generateModMetadata
 
 tasks.named('processResources') {
     dependsOn generateModMetadata
+}
+
+tasks.named('compileJava') {
+    dependsOn tasks.named('compileForgeCompatStubsJava')
 }
 
 tasks.named('jar') {
@@ -112,6 +124,8 @@ shadowJar {
     exclude 'META-INF/*.RSA'
     exclude 'META-INF/maven/**'
     exclude 'OSGI-INF/**'
+    exclude 'GIT_COMMIT_ID'
+    exclude 'Privacy.md'
     exclude 'it/unimi/dsi/fastutil/**'
     exclude 'ai/onnxruntime/native/linux-aarch64/**'
     exclude 'ai/onnxruntime/native/linux-x64/**'

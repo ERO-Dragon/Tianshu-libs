@@ -1,4 +1,5 @@
 plugins {
+    id 'base'
     id 'net.neoforged.moddev' version '2.0.141' apply false
     id 'com.gradleup.shadow' version '9.3.1' apply false
 }
@@ -19,6 +20,92 @@ subprojects {
 
         tasks.withType(JavaCompile).configureEach {
             options.encoding = 'UTF-8'
+            options.release = 17
         }
     }
+}
+
+evaluationDependsOn(':common')
+evaluationDependsOn(':fabric')
+evaluationDependsOn(':neoforge')
+
+def universalJarTask = tasks.register('universalJar', Zip) {
+    group = 'build'
+    description = 'Builds a single jar that can be discovered by both Fabric and NeoForge.'
+
+    archiveFileName = "${mod_id}-${mod_version}-universal.jar"
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    def neoForgeShadowJar = project(':neoforge').tasks.named('shadowJar')
+    dependsOn neoForgeShadowJar
+    from({ zipTree(neoForgeShadowJar.get().archiveFile.get().asFile) })
+
+    dependsOn project(':fabric').tasks.named('classes')
+    from(project(':fabric').sourceSets.main.output)
+}
+
+def universalJarArchive = universalJarTask.flatMap { it.archiveFile }
+
+tasks.register('validateUniversalNativeRuntime') {
+    group = 'verification'
+    description = 'Verifies the universal jar uses Sherpa ONNX Runtime native binaries.'
+
+    dependsOn universalJarTask
+    inputs.file universalJarArchive
+
+    doLast {
+        def forbiddenOrtRuntime = 'ai/onnxruntime/native/win-x64/onnxruntime.dll'
+        def requiredSherpaRuntime = 'sherpa-onnx/native/win-x64/onnxruntime.dll'
+        def requiredManifestEntries = [
+                'ai/onnxruntime/native/win-x64/onnxruntime4j_jni.dll',
+                'ai/onnxruntime/native/win-x64/onnxruntime_providers_shared.dll',
+                requiredSherpaRuntime,
+                'sherpa-onnx/native/win-x64/sherpa-onnx-jni.dll',
+        ] as Set
+
+        def jarFile = universalJarArchive.get().asFile
+        def entries = [] as Set
+        def manifestEntries = [] as Set
+        def zip = new java.util.zip.ZipFile(jarFile)
+        try {
+            zip.entries().each { entry ->
+                if (!entry.directory) entries << entry.name
+            }
+
+            def manifest = zip.getEntry('META-INF/native-libs.txt')
+            if (manifest == null) {
+                throw new GradleException("${jarFile.name} is missing META-INF/native-libs.txt")
+            }
+            manifestEntries.addAll(zip.getInputStream(manifest).getText('UTF-8')
+                    .readLines()
+                    .collect { it.trim() }
+                    .findAll { !it.isEmpty() && !it.startsWith('#') })
+        } finally {
+            zip.close()
+        }
+
+        if (entries.contains(forbiddenOrtRuntime)) {
+            throw new GradleException("${jarFile.name} must not include ${forbiddenOrtRuntime}; use Sherpa's ONNX Runtime DLL instead.")
+        }
+        if (manifestEntries.contains(forbiddenOrtRuntime)) {
+            throw new GradleException("META-INF/native-libs.txt must not include ${forbiddenOrtRuntime}; use Sherpa's ONNX Runtime DLL instead.")
+        }
+        if (!entries.contains(requiredSherpaRuntime)) {
+            throw new GradleException("${jarFile.name} is missing ${requiredSherpaRuntime}")
+        }
+
+        def missingManifestEntries = requiredManifestEntries.findAll { !manifestEntries.contains(it) }
+        if (!missingManifestEntries.isEmpty()) {
+            throw new GradleException("META-INF/native-libs.txt is missing native entries: ${missingManifestEntries.join(', ')}")
+        }
+    }
+}
+
+universalJarTask.configure {
+    finalizedBy tasks.named('validateUniversalNativeRuntime')
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('validateUniversalNativeRuntime')
 }

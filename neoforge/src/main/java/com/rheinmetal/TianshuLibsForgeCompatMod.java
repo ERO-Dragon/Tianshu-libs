@@ -1,14 +1,14 @@
 package com.rheinmetal;
 
-import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
 import com.rheinmetal.tianshu.libs.nativelib.NativeApiSmokeTest;
-import net.fabricmc.api.ModInitializer;
+import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
+import net.minecraftforge.fml.common.Mod;
 
-public class TianshuLibsFabricMod implements ModInitializer {
+@Mod(TianshuLibsForgeCompatMod.MOD_ID)
+public class TianshuLibsForgeCompatMod {
     public static final String MOD_ID = "tianshu_libs";
 
-    @Override
-    public void onInitialize() {
+    public TianshuLibsForgeCompatMod() {
         NativeLibraryLoader.ensureLoaded();
         NativeApiSmokeTest.runOnce();
     }
