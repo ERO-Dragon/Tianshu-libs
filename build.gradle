@@ -1,176 +1,24 @@
 plugins {
-    id 'java-library'
-    id 'net.neoforged.moddev' version '2.0.141'
-    id 'com.gradleup.shadow' version '9.3.1'
+    id 'net.neoforged.moddev' version '2.0.141' apply false
+    id 'com.gradleup.shadow' version '9.3.1' apply false
 }
 
-version = mod_version
-group = mod_group_id
+allprojects {
+    version = mod_version
+    group = mod_group_id
 
-base {
-    archivesName = mod_id
-}
-
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
-
-repositories {
-    mavenCentral()
-}
-
-neoForge {
-    version = project.neo_version
-
-    runs {
-        client {
-            client()
-            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-        }
-        server {
-            server()
-            programArgument '--nogui'
-            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-        }
-        configureEach {
-            logLevel = org.slf4j.event.Level.INFO
-        }
-    }
-
-    mods {
-        "${mod_id}" {
-            sourceSet sourceSets.main
-        }
+    repositories {
+        mavenCentral()
+        maven { url = 'https://maven.fabricmc.net/' }
     }
 }
 
-configurations {
-    shade
-    implementation.extendsFrom shade
-    jarJar
-    implementation.extendsFrom jarJar
-}
+subprojects {
+    plugins.withType(JavaPlugin).configureEach {
+        java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
-dependencies {
-    // JJML 使用 JarJar 嵌套打包（满足 LGPL 要求）
-    jarJar files('libs/org.argeo.jjml-2.1.2.0008-7201003.jar')
-
-    // 其他依赖使用 Shadow 打包  
-    shade files('libs/sherpa-onnx-v1.13.2.jar')
-    shade files('libs/sherpa-onnx-native-lib-win-x64-v1.13.2.jar')
-    shade 'com.microsoft.onnxruntime:onnxruntime:1.24.3'
-    shade 'io.github.eix128:sentencepiece4j:1.0.2'
-    shade 'com.google.protobuf:protobuf-java:4.33.2'
-    shade 'com.belerweb:pinyin4j:2.5.1'
-
-    compileOnly 'org.apache.commons:commons-compress:1.26.0'
-    compileOnly 'it.unimi.dsi:fastutil:8.5.12'
-    compileOnly 'com.google.code.gson:gson:2.10.1'
-    compileOnly 'org.slf4j:slf4j-api:2.0.9'
-
-    testImplementation platform('org.junit:junit-bom:6.0.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-}
-
-tasks.test {
-    useJUnitPlatform()
-}
-
-var generateNativeManifest = tasks.register('generateNativeManifest') {
-    def nativeDir = layout.projectDirectory.dir('src/main/resources/natives/windows-x86_64')
-    inputs.dir nativeDir
-    def outDir = layout.buildDirectory.dir('generated/resources/natives/windows-x86_64')
-    outputs.dir outDir
-    doLast {
-        outDir.get().asFile.mkdirs()
-        def dlls = nativeDir.asFile.listFiles()
-            .findAll { it.name.toLowerCase().endsWith('.dll') }
-            .sort { it.name }
-        new File(outDir.get().asFile, 'native-libs.txt').text = dlls.collect { it.name }.join('\n')
-    }
-}
-
-var generateExternalNativeManifest = tasks.register('generateExternalNativeManifest') {
-    def shadeDeps = configurations.shade
-    def outDir = layout.buildDirectory.dir('generated/resources/META-INF')
-    outputs.dir outDir
-    doLast {
-        outDir.get().asFile.mkdirs()
-        def externalDlls = []
-        shadeDeps.each { dep ->
-            if (dep.name.contains('onnxruntime') || dep.name.contains('sherpa')) {
-                def zip = new java.util.zip.ZipFile(dep)
-                zip.entries().each { entry ->
-                    if (!entry.directory && entry.name.toLowerCase().endsWith('.dll') 
-                        && (entry.name.contains('win-x64') || entry.name.contains('win64'))) {
-                        externalDlls << entry.name
-                    }
-                }
-                zip.close()
-            }
+        tasks.withType(JavaCompile).configureEach {
+            options.encoding = 'UTF-8'
         }
-        externalDlls = externalDlls.unique().sort()
-        new File(outDir.get().asFile, 'native-libs.txt').text = externalDlls.join('\n')
     }
-}
-
-var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
-    var replaceProperties = [
-            minecraft_version      : minecraft_version,
-            minecraft_version_range: minecraft_version_range,
-            neo_version            : neo_version,
-            loader_version_range   : loader_version_range,
-            mod_id                 : mod_id,
-            mod_name               : mod_name,
-            mod_license            : mod_license,
-            mod_version            : mod_version,
-    ]
-    inputs.properties replaceProperties
-    expand replaceProperties
-    from 'src/main/templates'
-    into 'build/generated/sources/modMetadata'
-}
-
-sourceSets.main.resources.srcDir layout.buildDirectory.dir('generated/resources')
-sourceSets.main.resources.srcDir generateModMetadata
-neoForge.ideSyncTask generateModMetadata
-
-tasks.named('processResources') {
-    dependsOn generateNativeManifest
-    dependsOn generateExternalNativeManifest
-}
-
-shadowJar {
-    archiveClassifier = ''
-    configurations = [project.configurations.shade]
-    mergeServiceFiles()
-
-    dependsOn generateNativeManifest
-    dependsOn tasks.named('jarJar')
-
-    into('META-INF/jarjar') {
-        from('build/generated/jarJar/META-INF/jarjar')
-    }
-
-    exclude 'META-INF/*.SF'
-    exclude 'META-INF/*.DSA'
-    exclude 'META-INF/*.RSA'
-    exclude 'META-INF/maven/**'
-    exclude 'OSGI-INF/**'
-    exclude 'it/unimi/dsi/fastutil/**'
-    exclude 'ai/onnxruntime/native/linux-aarch64/**'
-    exclude 'ai/onnxruntime/native/linux-x64/**'
-    exclude 'ai/onnxruntime/native/osx-aarch64/**'
-    exclude 'ai/onnxruntime/native/win-x64/onnxruntime.dll'
-}
-
-jar {
-    enabled = false
-}
-
-tasks.build {
-    dependsOn shadowJar
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
 }

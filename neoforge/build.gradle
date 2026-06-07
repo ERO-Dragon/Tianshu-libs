@@ -1,0 +1,124 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev'
+    id 'com.gradleup.shadow'
+}
+
+base {
+    archivesName = "${mod_id}-neoforge"
+}
+
+def libsDir = rootProject.layout.projectDirectory.dir('libs')
+def jjmlJar = libsDir.file("org.argeo.jjml-${jjml_version}.jar")
+def sherpaJar = libsDir.file("sherpa-onnx-v${sherpa_onnx_version}.jar")
+def sherpaNativeJar = libsDir.file("sherpa-onnx-native-lib-win-x64-v${sherpa_onnx_version}.jar")
+
+neoForge {
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+        configureEach {
+            logLevel = org.slf4j.event.Level.INFO
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+configurations {
+    shade
+    implementation.extendsFrom shade
+    jarJar
+    implementation.extendsFrom jarJar
+}
+
+dependencies {
+    implementation project(':common')
+
+    // Keep JJML as a nested dependency jar for LGPL compliance.
+    jarJar files(jjmlJar)
+
+    shade files(sherpaJar)
+    shade files(sherpaNativeJar)
+    shade "com.microsoft.onnxruntime:onnxruntime:${onnxruntime_version}"
+    shade "io.github.eix128:sentencepiece4j:${sentencepiece4j_version}"
+    shade "com.google.protobuf:protobuf-java:${protobuf_version}"
+    shade "com.belerweb:pinyin4j:${pinyin4j_version}"
+
+    compileOnly "org.apache.commons:commons-compress:${commons_compress_version}"
+    compileOnly "it.unimi.dsi:fastutil:${fastutil_version}"
+    compileOnly "com.google.code.gson:gson:${gson_version}"
+    compileOnly "org.slf4j:slf4j-api:${slf4j_version}"
+}
+
+def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    def replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
+}
+
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.named('processResources') {
+    dependsOn generateModMetadata
+}
+
+tasks.named('jar') {
+    enabled = false
+}
+
+shadowJar {
+    archiveClassifier = ''
+    configurations = [project.configurations.shade]
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    mergeServiceFiles()
+
+    dependsOn project(':common').tasks.named('classes')
+    dependsOn tasks.named('jarJar')
+
+    from(project(':common').sourceSets.main.output)
+
+    into('META-INF/jarjar') {
+        from(layout.buildDirectory.dir('generated/jarJar/META-INF/jarjar'))
+    }
+
+    exclude 'META-INF/*.SF'
+    exclude 'META-INF/*.DSA'
+    exclude 'META-INF/*.RSA'
+    exclude 'META-INF/maven/**'
+    exclude 'OSGI-INF/**'
+    exclude 'it/unimi/dsi/fastutil/**'
+    exclude 'ai/onnxruntime/native/linux-aarch64/**'
+    exclude 'ai/onnxruntime/native/linux-x64/**'
+    exclude 'ai/onnxruntime/native/osx-aarch64/**'
+    exclude 'ai/onnxruntime/native/win-x64/onnxruntime.dll'
+}
+
+tasks.build {
+    dependsOn shadowJar
+}

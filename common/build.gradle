@@ -1,0 +1,92 @@
+plugins {
+    id 'java-library'
+}
+
+def libsDir = rootProject.layout.projectDirectory.dir('libs')
+def jjmlJar = libsDir.file("org.argeo.jjml-${jjml_version}.jar")
+def sherpaJar = libsDir.file("sherpa-onnx-v${sherpa_onnx_version}.jar")
+def sherpaNativeJar = libsDir.file("sherpa-onnx-native-lib-win-x64-v${sherpa_onnx_version}.jar")
+
+configurations {
+    externalNativeManifest
+}
+
+dependencies {
+    api files(jjmlJar)
+    api files(sherpaJar)
+    api files(sherpaNativeJar)
+    api "com.microsoft.onnxruntime:onnxruntime:${onnxruntime_version}"
+    api "io.github.eix128:sentencepiece4j:${sentencepiece4j_version}"
+    api "com.google.protobuf:protobuf-java:${protobuf_version}"
+    api "com.belerweb:pinyin4j:${pinyin4j_version}"
+
+    compileOnly "org.apache.commons:commons-compress:${commons_compress_version}"
+    compileOnly "it.unimi.dsi:fastutil:${fastutil_version}"
+    compileOnly "com.google.code.gson:gson:${gson_version}"
+    compileOnly "org.slf4j:slf4j-api:${slf4j_version}"
+
+    testImplementation platform("org.junit:junit-bom:${junit_version}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    externalNativeManifest files(sherpaJar)
+    externalNativeManifest files(sherpaNativeJar)
+    externalNativeManifest "com.microsoft.onnxruntime:onnxruntime:${onnxruntime_version}"
+}
+
+tasks.test {
+    useJUnitPlatform()
+}
+
+def generateNativeManifest = tasks.register('generateNativeManifest') {
+    def nativeDir = layout.projectDirectory.dir('src/main/resources/natives/windows-x86_64')
+    inputs.dir nativeDir
+    def outDir = layout.buildDirectory.dir('generated/resources/natives/windows-x86_64')
+    outputs.dir outDir
+    doLast {
+        outDir.get().asFile.mkdirs()
+        def dlls = nativeDir.asFile.listFiles()
+                .findAll { it.name.toLowerCase().endsWith('.dll') }
+                .sort { it.name }
+        new File(outDir.get().asFile, 'native-libs.txt').text = dlls.collect { it.name }.join('\n')
+    }
+}
+
+def generateExternalNativeManifest = tasks.register('generateExternalNativeManifest') {
+    inputs.files configurations.externalNativeManifest
+    def outDir = layout.buildDirectory.dir('generated/resources/META-INF')
+    outputs.dir outDir
+    doLast {
+        outDir.get().asFile.mkdirs()
+        def externalDlls = []
+        configurations.externalNativeManifest.files.each { dep ->
+            if (!dep.isFile() || !dep.name.toLowerCase().endsWith('.jar')) return
+            if (dep.name.contains('onnxruntime') || dep.name.contains('sherpa')) {
+                try {
+                    def zip = new java.util.zip.ZipFile(dep)
+                    try {
+                        zip.entries().each { entry ->
+                            if (!entry.directory && entry.name.toLowerCase().endsWith('.dll')
+                                    && (entry.name.contains('win-x64') || entry.name.contains('win64'))) {
+                                externalDlls << entry.name
+                            }
+                        }
+                    } finally {
+                        zip.close()
+                    }
+                } catch (java.util.zip.ZipException e) {
+                    throw new GradleException("Failed to scan native libraries from ${dep}", e)
+                }
+            }
+        }
+        externalDlls = externalDlls.unique().sort()
+        new File(outDir.get().asFile, 'native-libs.txt').text = externalDlls.join('\n')
+    }
+}
+
+sourceSets.main.resources.srcDir layout.buildDirectory.dir('generated/resources')
+
+tasks.named('processResources') {
+    dependsOn generateNativeManifest
+    dependsOn generateExternalNativeManifest
+}

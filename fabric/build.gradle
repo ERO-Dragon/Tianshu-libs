@@ -1,0 +1,152 @@
+import groovy.json.JsonOutput
+
+plugins {
+    id 'java-library'
+    id 'com.gradleup.shadow'
+}
+
+base {
+    archivesName = "${mod_id}-fabric"
+}
+
+def libsDir = rootProject.layout.projectDirectory.dir('libs')
+def jjmlJar = libsDir.file("org.argeo.jjml-${jjml_version}.jar")
+def sherpaJar = libsDir.file("sherpa-onnx-v${sherpa_onnx_version}.jar")
+def sherpaNativeJar = libsDir.file("sherpa-onnx-native-lib-win-x64-v${sherpa_onnx_version}.jar")
+
+configurations {
+    shade
+    implementation.extendsFrom shade
+}
+
+dependencies {
+    compileOnly "net.fabricmc:fabric-loader:${fabric_loader_version}"
+
+    implementation project(':common')
+
+    compileOnly files(jjmlJar)
+
+    shade files(sherpaJar)
+    shade files(sherpaNativeJar)
+    shade "com.microsoft.onnxruntime:onnxruntime:${onnxruntime_version}"
+    shade "io.github.eix128:sentencepiece4j:${sentencepiece4j_version}"
+    shade "com.google.protobuf:protobuf-java:${protobuf_version}"
+    shade "com.belerweb:pinyin4j:${pinyin4j_version}"
+}
+
+def generatedResourcesDir = layout.buildDirectory.dir('generated/resources')
+def nestedJarsDir = generatedResourcesDir.map { it.dir('META-INF/jars') }
+def fabricJjmlMetadataDir = layout.buildDirectory.dir('generated/fabric-jjml-metadata')
+
+def generateFabricJjmlMetadata = tasks.register('generateFabricJjmlMetadata') {
+    inputs.property 'jjml_version', jjml_version
+    outputs.file fabricJjmlMetadataDir.map { it.file('fabric.mod.json') }
+
+    doLast {
+        def metadata = [
+                schemaVersion: 1,
+                id           : 'tianshu_libs_jjml',
+                version      : jjml_version,
+                name         : 'Tianshu Libraries JJML',
+                description  : 'Nested JJML dependency for Tianshu Libraries.',
+                license      : 'LGPL-2.1-only',
+                environment  : '*',
+                depends      : [
+                        fabricloader: '>=0.16.0',
+                        java        : '>=21'
+                ]
+        ]
+
+        def outFile = fabricJjmlMetadataDir.get().file('fabric.mod.json').asFile
+        outFile.parentFile.mkdirs()
+        outFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata))
+    }
+}
+
+def packageFabricJjmlJar = tasks.register('packageFabricJjmlJar', Zip) {
+    dependsOn generateFabricJjmlMetadata
+    archiveFileName = jjmlJar.asFile.name
+    destinationDirectory = layout.buildDirectory.dir('generated/nested-jars')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from(zipTree(jjmlJar))
+    from(fabricJjmlMetadataDir)
+}
+
+def copyNestedJars = tasks.register('copyNestedJars', Sync) {
+    from packageFabricJjmlJar.flatMap { it.archiveFile }
+    into nestedJarsDir
+}
+
+def generateFabricMetadata = tasks.register('generateFabricMetadata') {
+    inputs.property 'minecraft_version', minecraft_version
+    inputs.property 'mod_id', mod_id
+    inputs.property 'mod_name', mod_name
+    inputs.property 'mod_license', mod_license
+    inputs.property 'mod_version', mod_version
+    inputs.file packageFabricJjmlJar.flatMap { it.archiveFile }
+    outputs.file generatedResourcesDir.map { it.file('fabric.mod.json') }
+
+    doLast {
+        def nestedJars = [[file: "META-INF/jars/${jjmlJar.asFile.name}".toString()]]
+
+        def metadata = [
+                schemaVersion: 1,
+                id           : mod_id,
+                version      : mod_version,
+                name         : mod_name,
+                description  : 'Native AI inference library for Tianshu mod. Bundles llama.cpp (jjml), ONNX Runtime, Sherpa-ONNX, and SentencePiece.',
+                license      : mod_license,
+                environment  : 'client',
+                entrypoints  : [
+                        main: ['com.rheinmetal.TianshuLibsFabricMod']
+                ],
+                jars         : nestedJars,
+                depends      : [
+                        fabricloader: '>=0.16.0',
+                        minecraft   : minecraft_version,
+                        java        : '>=21'
+                ]
+        ]
+
+        def outFile = generatedResourcesDir.get().file('fabric.mod.json').asFile
+        outFile.parentFile.mkdirs()
+        outFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata))
+    }
+}
+
+sourceSets.main.resources.srcDir generatedResourcesDir
+
+tasks.named('processResources') {
+    dependsOn copyNestedJars
+    dependsOn generateFabricMetadata
+}
+
+tasks.named('jar') {
+    enabled = false
+}
+
+shadowJar {
+    archiveClassifier = ''
+    configurations = [project.configurations.shade]
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    mergeServiceFiles()
+
+    dependsOn project(':common').tasks.named('classes')
+    from(project(':common').sourceSets.main.output)
+
+    exclude 'META-INF/*.SF'
+    exclude 'META-INF/*.DSA'
+    exclude 'META-INF/*.RSA'
+    exclude 'META-INF/maven/**'
+    exclude 'OSGI-INF/**'
+    exclude 'it/unimi/dsi/fastutil/**'
+    exclude 'ai/onnxruntime/native/linux-aarch64/**'
+    exclude 'ai/onnxruntime/native/linux-x64/**'
+    exclude 'ai/onnxruntime/native/osx-aarch64/**'
+    exclude 'ai/onnxruntime/native/win-x64/onnxruntime.dll'
+}
+
+tasks.build {
+    dependsOn shadowJar
+}
