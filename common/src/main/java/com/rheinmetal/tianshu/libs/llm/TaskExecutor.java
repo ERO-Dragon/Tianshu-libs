@@ -195,6 +195,7 @@ public class TaskExecutor implements Runnable {
         writeMessages(processor, task);
 
         StringBuilder fullResponse = new StringBuilder();
+        ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
         Consumer<String> callback = task.getStreamCallback();
         int generatedTokens = 0;
         while (task.getMaxTokens() <= 0 || generatedTokens < task.getMaxTokens()) {
@@ -202,9 +203,13 @@ public class TaskExecutor implements Runnable {
             String token = processor.nextToken();
             if (token == null) break;
             generatedTokens++;
-            fullResponse.append(token);
-            if (callback != null) callback.accept(token);
+            String normalizedToken = reasoningNormalizer.accept(token);
+            fullResponse.append(normalizedToken);
+            if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
         }
+        String normalizedRemainder = reasoningNormalizer.finish();
+        fullResponse.append(normalizedRemainder);
+        if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
 
         if (task.isCancelled()) {
             task.getSyncFuture().cancel(false);
@@ -229,6 +234,7 @@ public class TaskExecutor implements Runnable {
         }
 
         Consumer<String> callback = task.getStreamCallback();
+        ReasoningTagNormalizer reasoningNormalizer = state.reasoningNormalizer;
         while (task.getMaxTokens() <= 0 || state.generatedTokens < task.getMaxTokens()) {
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
@@ -239,8 +245,9 @@ public class TaskExecutor implements Runnable {
             String token = processor.nextToken();
             if (token == null) break;
             state.generatedTokens++;
-            state.generatedText.append(token);
-            if (callback != null) callback.accept(token);
+            String normalizedToken = reasoningNormalizer.accept(token);
+            state.generatedText.append(normalizedToken);
+            if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
             if (engine.shouldSuspendTaskLane(task)) {
                 LlamaCppContextState.ByteBufferSavedState savedState = new LlamaCppContextState.ByteBufferSavedState();
                 processor.saveContextState(savedState);
@@ -249,6 +256,9 @@ public class TaskExecutor implements Runnable {
                 return ExecutionResult.SUSPENDED;
             }
         }
+        String normalizedRemainder = reasoningNormalizer.finish();
+        state.generatedText.append(normalizedRemainder);
+        if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
 
         task.getSyncFuture().complete(state.generatedText.toString());
         clearSuspendedTask(task);
@@ -331,6 +341,7 @@ public class TaskExecutor implements Runnable {
     private static class SuspendedTask {
         private final InferenceTask task;
         private final StringBuilder generatedText = new StringBuilder();
+        private final ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
         private int generatedTokens;
         private LlamaCppContextState.ByteBufferSavedState savedState;
 
