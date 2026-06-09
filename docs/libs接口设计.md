@@ -32,6 +32,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .cacheTypeV(KvCacheType.F16)          // 可选：F16 / Q8_0
     .taskContext(16000)                   // 可选；不设置时等于 chatContext
     .taskThreads(2)
+    // taskMaxQueueSize range: 0..5; 0 means no HOT KV/context slot, suspended TASKs go COLD.
     .taskMaxQueueSize(1)                 // TASK 热挂起槽数量；控制最多保留多少个 TASK KV/context
     .taskSuspendOnChat(true)
     .embeddingModel("models/bge.gguf")    // 可选：不配置则 embed/search 不可用

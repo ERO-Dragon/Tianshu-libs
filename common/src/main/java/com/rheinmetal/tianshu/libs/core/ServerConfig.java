@@ -58,7 +58,7 @@ public class ServerConfig {
         range(config.embeddingGpuLayers, 0, 9999, "embeddingGpuLayers", errors);
         range(config.maxQueueSize, 1, 1024, "maxQueueSize", errors);
         range(config.chatMaxQueueSize, 1, 1024, "chatMaxQueueSize", errors);
-        range(config.taskMaxQueueSize, 1, 1024, "taskMaxQueueSize", errors);
+        range(config.taskMaxQueueSize, 0, 5, "taskMaxQueueSize", errors);
         range(config.requestTimeoutSeconds, 1, 3600, "requestTimeoutSeconds", errors);
     }
 

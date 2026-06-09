@@ -10,7 +10,11 @@ public class LaneConfig {
         if (lane == null) throw new IllegalArgumentException("lane is required");
         if (contextSize < 1) throw new IllegalArgumentException("contextSize must be positive");
         if (threadCount < 1) throw new IllegalArgumentException("threadCount must be positive");
-        if (maxQueueSize < 1) throw new IllegalArgumentException("maxQueueSize must be positive");
+        if (lane == InferenceLane.TASK) {
+            if (maxQueueSize < 0) throw new IllegalArgumentException("task maxQueueSize cannot be negative");
+        } else if (maxQueueSize < 1) {
+            throw new IllegalArgumentException("maxQueueSize must be positive");
+        }
         this.lane = lane;
         this.contextSize = contextSize;
         this.threadCount = threadCount;
