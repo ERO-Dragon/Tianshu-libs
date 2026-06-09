@@ -38,6 +38,22 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
     systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
+    systemProperty 'tianshu.llm.samples', System.getProperty('tianshu.llm.samples', '')
+    systemProperty 'tianshu.llm.perf', System.getProperty('tianshu.llm.perf', '')
+}
+
+tasks.register('manualNoThinkChat', JavaExec) {
+    group = 'verification'
+    description = 'Starts an interactive no-think LLM chat console for manual latency testing.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualNoThinkChat'
+    standardInput = System.in
+    systemProperty 'tianshu.llm.model', System.getProperty(
+            'tianshu.llm.model',
+            'D:\\Minecraft\\.minecraft\\versions\\Tianshu\\config\\TianshuAIAssistant\\models\\llm\\Qwen3-4B\\Qwen3-4B-Q4_K_M.gguf'
+    )
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.llm.maxTurns', System.getProperty('tianshu.llm.maxTurns', '6')
 }
 
 def generateNativeManifest = tasks.register('generateNativeManifest') {
