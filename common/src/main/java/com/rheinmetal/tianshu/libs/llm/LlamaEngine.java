@@ -35,7 +35,6 @@ public class LlamaEngine {
     private final LinkedBlockingQueue<InferenceTask> chatQueue;
     private final PriorityBlockingQueue<PrioritizedInferenceTask> taskQueue;
     private final AtomicInteger pendingChatTasks = new AtomicInteger(0);
-    private final AtomicInteger acceptedTaskCount = new AtomicInteger(0);
     private final ExecutorService inferenceExecutor;
     private final Object taskArrivalLock = new Object();
     private volatile boolean hasPendingTasks = false;
@@ -164,18 +163,8 @@ public class LlamaEngine {
             return;
         }
         
-        int maxQueueSize = taskLaneConfig.getMaxQueueSize();
-        int current;
-        do {
-            current = acceptedTaskCount.get();
-            if (current >= maxQueueSize) {
-                throw new RejectedExecutionException("task inference queue is full");
-            }
-        } while (!acceptedTaskCount.compareAndSet(current, current + 1));
-        
         boolean accepted = taskQueue.offer(new PrioritizedInferenceTask(task));
         if (!accepted) {
-            finishTask(task);
             throw new RejectedExecutionException("task inference queue is full");
         }
         notifyTaskArrival();
@@ -217,21 +206,30 @@ public class LlamaEngine {
             if (chatQueue.remove(task)) {
                 pendingChatTasks.decrementAndGet();
                 task.getSyncFuture().cancel(false);
+                return;
             }
+            notifyTaskArrival();
             return;
         }
         boolean removed = taskQueue.removeIf(queued -> queued.wraps(task));
         if (removed) {
             task.getSyncFuture().cancel(false);
             finishTask(task);
+            notifyTaskArrival();
+            return;
         }
+        notifyTaskArrival();
     }
 
     void finishTask(InferenceTask task) {
-        if (task == null || task.getLane() != InferenceLane.TASK) return;
-        if (task.releaseTaskLaneSlotOnce()) {
-            acceptedTaskCount.decrementAndGet();
-        }
+    }
+
+    int getTaskQueueSizeInternal() {
+        return taskQueue.size();
+    }
+
+    int getHotSuspendLimit() {
+        return taskLaneConfig.getMaxQueueSize();
     }
 
     void notifyTaskArrival() {
@@ -362,16 +360,16 @@ public class LlamaEngine {
     public int getMaxQueueSize() { return chatLaneConfig.getMaxQueueSize(); }
     public boolean hasQueueCapacity() { return hasQueueCapacity(InferenceLane.CHAT); }
     public int getChatQueueSize() { return chatQueue.size(); }
-    public int getTaskLoad() { return acceptedTaskCount.get(); }
+    public int getTaskLoad() { return taskQueue.size(); }
     public int getTaskQueueSize() { return getTaskLoad(); }
     public boolean hasQueueCapacity(InferenceLane lane) {
         return lane == InferenceLane.TASK 
-            ? acceptedTaskCount.get() < taskLaneConfig.getMaxQueueSize() 
+            ? true
             : chatQueue.remainingCapacity() > 0;
     }
 
     public LaneMetrics getLaneMetrics() {
-        return new LaneMetrics(chatQueue.size(), chatLaneConfig.getMaxQueueSize(), acceptedTaskCount.get(), taskLaneConfig.getMaxQueueSize(), currentLane, taskSuspended);
+        return new LaneMetrics(chatQueue.size(), chatLaneConfig.getMaxQueueSize(), taskQueue.size(), taskLaneConfig.getMaxQueueSize(), currentLane, taskSuspended);
     }
 
     public boolean isModelLoaded() { return model != null; }

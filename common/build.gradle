@@ -28,6 +28,7 @@ dependencies {
     testImplementation platform("org.junit:junit-bom:${junit_version}")
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly "org.slf4j:slf4j-simple:${slf4j_version}"
 
     externalNativeManifest files(sherpaJar)
     externalNativeManifest files(sherpaNativeJar)
@@ -36,6 +37,7 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
 }
 
 def generateNativeManifest = tasks.register('generateNativeManifest') {
