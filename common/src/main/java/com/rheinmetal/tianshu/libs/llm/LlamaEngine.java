@@ -26,6 +26,7 @@ public class LlamaEngine {
     private final LaneConfig chatLaneConfig;
     private final LaneConfig taskLaneConfig;
     private final int gpuLayers;
+    private final String device;
     private final String modelAlias;
     private final String modelProfile;
     private final KvCacheType cacheTypeK;
@@ -52,6 +53,7 @@ public class LlamaEngine {
                         LaneConfig chatLaneConfig,
                         LaneConfig taskLaneConfig,
                         int gpuLayers,
+                        String device,
                         String modelAlias,
                         String modelProfile,
                         KvCacheType cacheTypeK,
@@ -62,6 +64,7 @@ public class LlamaEngine {
         this.chatLaneConfig = chatLaneConfig;
         this.taskLaneConfig = taskLaneConfig;
         this.gpuLayers = gpuLayers;
+        this.device = device;
         this.modelAlias = modelAlias;
         this.modelProfile = modelProfile;
         this.cacheTypeK = cacheTypeK;
@@ -77,43 +80,51 @@ public class LlamaEngine {
     }
 
     public static LlamaEngine loadChatEngine(String modelPath, int contextSize, int threadCount,
-                                             int gpuLayers, String modelAlias, String modelProfile) throws Exception {
-        return loadChatEngine(modelPath, contextSize, threadCount, gpuLayers, modelAlias, modelProfile, 4);
+                                              int gpuLayers, String modelAlias, String modelProfile) throws Exception {
+        return loadChatEngine(modelPath, contextSize, threadCount, gpuLayers, null, modelAlias, modelProfile, 4);
     }
 
     public static LlamaEngine loadChatEngine(String modelPath, int contextSize, int threadCount,
-                                             int gpuLayers, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
+                                              int gpuLayers, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
+        return loadChatEngine(modelPath, contextSize, threadCount, gpuLayers, null, modelAlias, modelProfile, maxQueueSize);
+    }
+
+    public static LlamaEngine loadChatEngine(String modelPath, int contextSize, int threadCount,
+                                             int gpuLayers, String device, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
         LaneConfig chatLane = new LaneConfig(InferenceLane.CHAT, contextSize, threadCount, maxQueueSize);
         LaneConfig taskLane = new LaneConfig(InferenceLane.TASK, contextSize, Math.max(1, threadCount), 1);
-        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, modelAlias, modelProfile, null, null, true);
+        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, device, modelAlias, modelProfile, null, null, true);
     }
 
     public static LlamaEngine loadChatEngine(String modelPath,
                                              LaneConfig chatLaneConfig,
                                              LaneConfig taskLaneConfig,
                                              int gpuLayers,
+                                             String device,
                                              String modelAlias,
                                              String modelProfile,
                                              KvCacheType cacheTypeK,
                                              KvCacheType cacheTypeV,
                                              boolean taskSuspendOnChat) throws Exception {
-        LlamaCppModel model = loadModel("chat", modelPath, gpuLayers);
+        LlamaCppModel model = loadModel("chat", modelPath, gpuLayers, device);
         String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
         System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
-        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat);
+        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat);
         engine.startWorker();
         return engine;
     }
 
-    private static LlamaCppModel loadModel(String engineName, String modelPath, int gpuLayers) throws Exception {
+    private static LlamaCppModel loadModel(String engineName, String modelPath, int gpuLayers, String device) throws Exception {
         Path mp = Path.of(modelPath);
         if (!Files.exists(mp)) {
             throw new IllegalArgumentException("Model file not found: " + modelPath);
         }
         System.out.println("[LlamaEngine:" + engineName + "] Loading model: " + modelPath);
         System.out.println("[LlamaEngine:" + engineName + "] GPU layers: " + gpuLayers);
+        if (device != null) System.out.println("[LlamaEngine:" + engineName + "] Device: " + device);
         var modelParams = LlamaCppModel.defaultModelParams()
                 .with(ModelParam.n_gpu_layers, gpuLayers);
+        if (device != null) modelParams = modelParams.with(ModelParam.device, device);
         LlamaCppModel model = LlamaCppModel.loadAsync(mp, modelParams, progress -> {
             if (progress > 0) System.out.print("\r[LlamaEngine:" + engineName + "] Loading: " + (int) (progress * 100) + "%");
         }, null).get();
@@ -296,6 +307,7 @@ public class LlamaEngine {
     public int getContextSize() { return chatLaneConfig.getContextSize(); }
     public int getThreadCount() { return chatLaneConfig.getThreadCount(); }
     public int getGpuLayers() { return gpuLayers; }
+    public String getDevice() { return device; }
     public LaneConfig getChatLaneConfig() { return chatLaneConfig; }
     public LaneConfig getTaskLaneConfig() { return taskLaneConfig; }
     public KvCacheType getCacheTypeK() { return cacheTypeK; }

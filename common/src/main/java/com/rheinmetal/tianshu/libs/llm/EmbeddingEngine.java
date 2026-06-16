@@ -22,6 +22,7 @@ public class EmbeddingEngine {
     private final int contextSize;
     private final int threadCount;
     private final int gpuLayers;
+    private final String device;
     private final String modelAlias;
     private final ExecutorService embeddingExecutor;
     private volatile boolean running = true;
@@ -30,11 +31,12 @@ public class EmbeddingEngine {
         NativeLibraryLoader.ensureLoaded();
     }
 
-    private EmbeddingEngine(LlamaCppModel model, int contextSize, int threadCount, int gpuLayers, String modelAlias) {
+    private EmbeddingEngine(LlamaCppModel model, int contextSize, int threadCount, int gpuLayers, String device, String modelAlias) {
         this.model = model;
         this.contextSize = contextSize;
         this.threadCount = threadCount;
         this.gpuLayers = gpuLayers;
+        this.device = device;
         this.modelAlias = modelAlias;
         this.embeddingExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "embedding-worker");
@@ -44,20 +46,26 @@ public class EmbeddingEngine {
     }
 
     public static EmbeddingEngine load(String modelPath, int contextSize, int threadCount, int gpuLayers, String modelAlias) throws Exception {
+        return load(modelPath, contextSize, threadCount, gpuLayers, null, modelAlias);
+    }
+
+    public static EmbeddingEngine load(String modelPath, int contextSize, int threadCount, int gpuLayers, String device, String modelAlias) throws Exception {
         Path mp = Path.of(modelPath);
         if (!Files.exists(mp)) {
             throw new IllegalArgumentException("Embedding model file not found: " + modelPath);
         }
         System.out.println("[EmbeddingEngine] Loading model: " + modelPath);
         System.out.println("[EmbeddingEngine] GPU layers: " + gpuLayers);
+        if (device != null) System.out.println("[EmbeddingEngine] Device: " + device);
         var modelParams = LlamaCppModel.defaultModelParams()
                 .with(ModelParam.n_gpu_layers, gpuLayers);
+        if (device != null) modelParams = modelParams.with(ModelParam.device, device);
         LlamaCppModel model = LlamaCppModel.loadAsync(mp, modelParams, progress -> {
             if (progress > 0) System.out.print("\r[EmbeddingEngine] Loading: " + (int) (progress * 100) + "%");
         }, null).get();
         System.out.println("\n[EmbeddingEngine] Model loaded: " + model.getDescription());
         System.out.println("[EmbeddingEngine] Embedding size: " + model.getEmbeddingSize());
-        return new EmbeddingEngine(model, contextSize, threadCount, gpuLayers, modelAlias);
+        return new EmbeddingEngine(model, contextSize, threadCount, gpuLayers, device, modelAlias);
     }
 
     public float[] embed(String text) throws Exception {
@@ -117,6 +125,7 @@ public class EmbeddingEngine {
     public int getContextSize() { return contextSize; }
     public int getThreadCount() { return threadCount; }
     public int getGpuLayers() { return gpuLayers; }
+    public String getDevice() { return device; }
     public int getEmbeddingSize() { return model.getEmbeddingSize(); }
     public int getLayerCount() { return model.getLayerCount(); }
     public long getModelSize() { return model.getModelSize(); }

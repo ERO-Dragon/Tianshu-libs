@@ -17,12 +17,14 @@ public class ServerConfig {
     public int contextSize = DEFAULT_CONTEXT_SIZE;
     public int threads = DEFAULT_THREAD_COUNT;
     public int gpuLayers = DEFAULT_GPU_LAYERS;
+    public String device;
     public String modelAlias = "unknown";
     public String modelProfile;
     public String embeddingModelPath;
     public int embeddingContextSize = DEFAULT_CONTEXT_SIZE;
     public int embeddingThreads = DEFAULT_THREAD_COUNT;
     public int embeddingGpuLayers = DEFAULT_GPU_LAYERS;
+    public String embeddingDevice;
     public String embeddingAlias = "embedding";
     public int maxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
     public int chatContext = DEFAULT_CONTEXT_SIZE;
