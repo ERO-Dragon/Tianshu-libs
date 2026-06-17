@@ -2,7 +2,7 @@ English | [中文](./README_zh.md)
 
 # Tianshu Libraries
 
-[CurseForge](#) | [Modrinth](#) | [GitHub](https://github.com/ERO-Dragon/Tianshu-libs) | [Gitee](https://gitee.com/tianshu-ai/tianshu-libs)
+[CurseForge](https://www.curseforge.com/minecraft/mc-mods/tianshu-library/preview) | [Modrinth](https://modrinth.com/mod/tianshu-library) | [GitHub](https://github.com/ERO-Dragon/Tianshu-libs) | [Gitee](https://gitee.com/tianshu-ai/tianshu-libs)
 
 ---
 
@@ -32,7 +32,7 @@ Simply drop the downloaded mod JAR (`tianshu_libs-x.x.x.jar`) into your `.minecr
 
 ## Related Projects
 
-- [JJML (llama.cpp Java bindings)](https://github.com/argeo/argeo-jjml) - *Vulkan backend build.*
+- [JJML (llama.cpp Java bindings)](https://github.com/ERO-Dragon/argeo-jjml/tree/EroDragon/jjml) - *Vulkan backend build.*
 - [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx)
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime)
 
