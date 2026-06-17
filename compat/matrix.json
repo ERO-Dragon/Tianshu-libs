@@ -1,0 +1,607 @@
+{
+    "targets":  {
+                    "fabric-1.20":  {
+                                        "loader":  "fabric",
+                                        "minecraft":  "1.20",
+                                        "loaderVersion":  "0.19.3",
+                                        "status":  "verified",
+                                        "requiredEntries":  [
+                                                                "fabric.mod.json",
+                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                            ]
+                                    },
+                    "fabric-1.20.1":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.1",
+                                          "loaderVersion":  "0.19.3",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.20.2":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.2",
+                                          "loaderVersion":  "0.19.3",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.20.3":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.3",
+                                          "loaderVersion":  "0.19.3",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.20.4":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.4",
+                                          "loaderVersion":  "0.16.14",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.20.5":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.5",
+                                          "loaderVersion":  "0.19.3",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.20.6":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.20.6",
+                                          "loaderVersion":  "0.19.3",
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21":  {
+                                        "loader":  "fabric",
+                                        "minecraft":  "1.21",
+                                        "loaderVersion":  "0.19.3",
+                                        "java":  21,
+                                        "status":  "verified",
+                                        "requiredEntries":  [
+                                                                "fabric.mod.json",
+                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                            ]
+                                    },
+                    "fabric-1.21.1":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.1",
+                                          "loaderVersion":  "0.16.14",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.2":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.2",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.3":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.3",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.4":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.4",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.5":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.5",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.6":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.6",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.7":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.7",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.8":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.8",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.9":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "1.21.9",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-1.21.10":  {
+                                           "loader":  "fabric",
+                                           "minecraft":  "1.21.10",
+                                           "loaderVersion":  "0.19.3",
+                                           "java":  21,
+                                           "status":  "verified",
+                                           "requiredEntries":  [
+                                                                   "fabric.mod.json",
+                                                                   "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                               ]
+                                       },
+                    "fabric-1.21.11":  {
+                                           "loader":  "fabric",
+                                           "minecraft":  "1.21.11",
+                                           "loaderVersion":  "0.19.3",
+                                           "java":  21,
+                                           "status":  "verified",
+                                           "requiredEntries":  [
+                                                                   "fabric.mod.json",
+                                                                   "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                               ]
+                                       },
+                    "fabric-26.1":  {
+                                        "loader":  "fabric",
+                                        "minecraft":  "26.1",
+                                        "loaderVersion":  "0.19.3",
+                                        "java":  25,
+                                        "status":  "blocked",
+                                        "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
+                                        "requiredEntries":  [
+                                                                "fabric.mod.json",
+                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                            ]
+                                    },
+                    "fabric-26.1.1":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "26.1.1",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  25,
+                                          "status":  "blocked",
+                                          "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1.1 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-26.1.2":  {
+                                          "loader":  "fabric",
+                                          "minecraft":  "26.1.2",
+                                          "loaderVersion":  "0.19.3",
+                                          "java":  25,
+                                          "status":  "blocked",
+                                          "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1.2 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
+                                          "requiredEntries":  [
+                                                                  "fabric.mod.json",
+                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                              ]
+                                      },
+                    "fabric-26.2":  {
+                                        "loader":  "fabric",
+                                        "minecraft":  "26.2",
+                                        "loaderVersion":  "0.19.3",
+                                        "java":  25,
+                                        "status":  "blocked",
+                                        "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.2 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
+                                        "requiredEntries":  [
+                                                                "fabric.mod.json",
+                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                            ]
+                                    },
+                    "forge-1.20":  {
+                                       "loader":  "forge",
+                                       "minecraft":  "1.20",
+                                       "loaderVersion":  "1.20-46.0.14",
+                                       "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                       "status":  "verified",
+                                       "requiredEntries":  [
+                                                               "META-INF/mods.toml",
+                                                               "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                           ]
+                                   },
+                    "forge-1.20.1":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.1",
+                                         "loaderVersion":  "1.20.1-47.4.20",
+                                         "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                         "status":  "blocked",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ],
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
+                                     },
+                    "forge-1.20.2":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.2",
+                                         "loaderVersion":  "1.20.2-48.1.0",
+                                         "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                         "status":  "blocked",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ],
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
+                                     },
+                    "forge-1.20.3":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.3",
+                                         "loaderVersion":  "1.20.3-49.0.2",
+                                         "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                         "status":  "blocked",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ],
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
+                                     },
+                    "forge-1.20.4":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.4",
+                                         "loaderVersion":  "1.20.4-49.2.7",
+                                         "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                         "status":  "blocked",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ],
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
+                                     },
+                    "forge-1.20.5":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.5",
+                                         "status":  "blocked",
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge.",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ]
+                                     },
+                    "forge-1.20.6":  {
+                                         "loader":  "forge",
+                                         "minecraft":  "1.20.6",
+                                         "loaderVersion":  "1.20.6-50.2.8",
+                                         "supportRange":  "\u003e=1.20 \u003c1.20.1",
+                                         "status":  "blocked",
+                                         "requiredEntries":  [
+                                                                 "META-INF/mods.toml",
+                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                             ],
+                                         "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
+                                     },
+                    "neoforge-1.20":  {
+                                          "loader":  "neoforge",
+                                          "minecraft":  "1.20",
+                                          "status":  "blocked",
+                                          "blockedReason":  "NeoForge Maven metadata currently exposes no NeoForge coordinate for Minecraft 1.20.",
+                                          "requiredEntries":  [
+                                                                  "META-INF/mods.toml",
+                                                                  "META-INF/neoforge.mods.toml",
+                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                              ]
+                                      },
+                    "neoforge-1.20.1":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.1",
+                                            "status":  "blocked",
+                                            "blockedReason":  "NeoForge Maven metadata currently exposes no NeoForge coordinate for Minecraft 1.20.1.",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.20.2":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.2",
+                                            "loaderVersion":  "20.2.93",
+                                            "status":  "blocked",
+                                            "blockedReason":  "NeoForge ModDev 2.0.141 cannot create Minecraft artifacts for this coordinate because net.neoforged:neoforge:20.2.93 does not expose the requested neoforge-moddev-bundle capability.",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.20.3":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.3",
+                                            "loaderVersion":  "20.3.8-beta",
+                                            "status":  "blocked",
+                                            "blockedReason":  "NeoForge ModDev 2.0.141 cannot create Minecraft artifacts for this coordinate because net.neoforged:neoforge:20.3.8-beta does not expose the requested neoforge-moddev-bundle capability.",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.20.4":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.4",
+                                            "loaderVersion":  "20.4.251",
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.20.5":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.5",
+                                            "loaderVersion":  "20.5.21-beta",
+                                            "status":  "blocked",
+                                            "blockedReason":  "NeoForge ModDev 2.0.141 cannot create Minecraft artifacts for this coordinate because net.neoforged:neoforge:20.5.21-beta does not expose the requested neoforge-moddev-bundle capability.",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.20.6":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.20.6",
+                                            "loaderVersion":  "20.6.139",
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.21":  {
+                                          "loader":  "neoforge",
+                                          "minecraft":  "1.21",
+                                          "loaderVersion":  "21.0.167",
+                                          "java":  21,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "META-INF/mods.toml",
+                                                                  "META-INF/neoforge.mods.toml",
+                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                              ]
+                                      },
+                    "neoforge-1.21.1":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.1",
+                                            "loaderVersion":  "21.1.233",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.21.2":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.2",
+                                            "loaderVersion":  "21.2.1-beta",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.21.3":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.3",
+                                            "loaderVersion":  "21.3.96",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+    "neoforge-1.21.4":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.4",
+                                            "loaderVersion":  "21.4.157",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+    "neoforge-1.21.5":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.5",
+                                            "loaderVersion":  "21.5.97",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+    "neoforge-1.21.6":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.6",
+                                            "loaderVersion":  "21.6.20-beta",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+    "neoforge-1.21.7":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.7",
+                                            "loaderVersion":  "21.7.25-beta",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+    "neoforge-1.21.8":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.8",
+                                            "loaderVersion":  "21.8.53",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.21.9":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "1.21.9",
+                                            "loaderVersion":  "21.9.16-beta",
+                                            "java":  21,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-1.21.10":  {
+                                             "loader":  "neoforge",
+                                             "minecraft":  "1.21.10",
+                                             "loaderVersion":  "21.10.64",
+                                             "java":  21,
+                                             "status":  "verified",
+                                             "requiredEntries":  [
+                                                                     "META-INF/mods.toml",
+                                                                     "META-INF/neoforge.mods.toml",
+                                                                     "com/rheinmetal/TianshuLibsMod.class"
+                                                                 ]
+                                         },
+                    "neoforge-1.21.11":  {
+                                             "loader":  "neoforge",
+                                             "minecraft":  "1.21.11",
+                                             "loaderVersion":  "21.11.42",
+                                             "java":  21,
+                                             "status":  "verified",
+                                             "requiredEntries":  [
+                                                                     "META-INF/mods.toml",
+                                                                     "META-INF/neoforge.mods.toml",
+                                                                     "com/rheinmetal/TianshuLibsMod.class"
+                                                                 ]
+                                         },
+                    "neoforge-26.1":  {
+                                          "loader":  "neoforge",
+                                          "minecraft":  "26.1",
+                                          "loaderVersion":  "26.1.0.19-beta",
+                                          "java":  25,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "META-INF/mods.toml",
+                                                                  "META-INF/neoforge.mods.toml",
+                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                              ]
+                                      },
+                    "neoforge-26.1.1":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "26.1.1",
+                                            "loaderVersion":  "26.1.1.15-beta",
+                                            "java":  25,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-26.1.2":  {
+                                            "loader":  "neoforge",
+                                            "minecraft":  "26.1.2",
+                                            "loaderVersion":  "26.1.2.76",
+                                            "java":  25,
+                                            "status":  "verified",
+                                            "requiredEntries":  [
+                                                                    "META-INF/mods.toml",
+                                                                    "META-INF/neoforge.mods.toml",
+                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                ]
+                                        },
+                    "neoforge-26.2":  {
+                                          "loader":  "neoforge",
+                                          "minecraft":  "26.2",
+                                          "loaderVersion":  "26.2.0.0-beta",
+                                          "java":  25,
+                                          "status":  "verified",
+                                          "requiredEntries":  [
+                                                                  "META-INF/mods.toml",
+                                                                  "META-INF/neoforge.mods.toml",
+                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                              ]
+                                      }
+                }
+}

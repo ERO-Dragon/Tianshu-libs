@@ -1,8 +1,13 @@
 plugins {
     id 'base'
     id 'net.neoforged.moddev' version '2.0.141' apply false
+    id 'net.neoforged.moddev.legacyforge' version '2.0.141' apply false
+    id 'fabric-loom' version '1.11-SNAPSHOT' apply false
     id 'com.gradleup.shadow' version '9.3.1' apply false
 }
+
+import com.rheinmetal.compat.CompatMatrixTask
+import groovy.json.JsonSlurper
 
 allprojects {
     version = mod_version
@@ -11,6 +16,8 @@ allprojects {
     repositories {
         mavenCentral()
         maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.neoforged.net/releases' }
+        maven { url = 'https://maven.minecraftforge.net/' }
     }
 }
 
@@ -43,9 +50,79 @@ def universalJarTask = tasks.register('universalJar', Zip) {
 
     dependsOn project(':fabric').tasks.named('classes')
     from(project(':fabric').sourceSets.main.output)
+
+    from('neoforge/src/main/templates/META-INF/mods.toml') {
+        into 'META-INF'
+        expand([
+                minecraft_version                  : minecraft_version,
+                minecraft_version_range            : minecraft_version_range,
+                neo_version                        : providers.gradleProperty('neoforge_version')
+                        .orElse(providers.gradleProperty('neoforge_dev_version'))
+                        .get(),
+                neo_version_range                  : neo_version_range,
+                forge_legacy_version_range         : forge_legacy_version_range,
+                forge_legacy_minecraft_version_range: forge_legacy_minecraft_version_range,
+                loader_version_range               : loader_version_range,
+                mod_id                             : mod_id,
+                mod_name                           : mod_name,
+                mod_license                        : mod_license,
+                mod_version                        : mod_version,
+        ])
+    }
 }
 
 def universalJarArchive = universalJarTask.flatMap { it.archiveFile }
+
+def compatMatrixFile = layout.projectDirectory.file('compat/matrix.json')
+def compatTargets = providers.fileContents(compatMatrixFile).asText.map { text ->
+    def matrix = new JsonSlurper().parseText(text)
+    matrix.targets.collectEntries { target, spec ->
+        def resolvedSpec = new LinkedHashMap(spec)
+        if (resolvedSpec.loaderVersion == null && resolvedSpec.status != 'blocked') {
+            throw new GradleException("compat target '${target}' must define loaderVersion")
+        }
+        [(target): resolvedSpec]
+    }
+}
+
+def compatTargetDescriptors = compatTargets.map { targets ->
+    targets.collectEntries { target, spec ->
+        def descriptor = groovy.json.JsonOutput.toJson([
+                loader        : spec.loader,
+                minecraft     : spec.minecraft,
+                loaderVersion : spec.loaderVersion,
+                java          : spec.java,
+                status        : spec.status,
+                requiredEntries: spec.requiredEntries,
+        ])
+        [(target): descriptor]
+    }
+}
+
+def compatRequiredEntries = compatTargets.map { targets ->
+    targets.collectEntries { target, spec ->
+        [(target): spec.requiredEntries]
+    }
+}
+
+tasks.register('stageCompatMatrix', CompatMatrixTask) {
+    group = 'verification'
+    description = 'Stages the universal jar into lightweight per-loader compatibility directories.'
+
+    dependsOn universalJarTask
+    universalJar.set(universalJarArchive)
+    targets.set(compatTargets.map { it.keySet().toList() })
+    targetDescriptors.set(compatTargetDescriptors)
+    requiredEntries.set(compatRequiredEntries)
+    stagingDirectory.set(layout.buildDirectory.dir('compat'))
+}
+
+tasks.register('verifyCompatMatrix') {
+    group = 'verification'
+    description = 'Verifies and stages the compatibility matrix without duplicating full Minecraft installations.'
+
+    dependsOn tasks.named('stageCompatMatrix')
+}
 
 tasks.register('validateUniversalNativeRuntime') {
     group = 'verification'
@@ -108,4 +185,5 @@ universalJarTask.configure {
 
 tasks.named('build') {
     dependsOn tasks.named('validateUniversalNativeRuntime')
+    dependsOn tasks.named('verifyCompatMatrix')
 }

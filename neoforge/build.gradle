@@ -18,7 +18,9 @@ sourceSets {
 }
 
 neoForge {
-    version = project.neo_version
+    version = providers.gradleProperty('neoforge_version')
+            .orElse(providers.gradleProperty('neoforge_dev_version'))
+            .get()
 
     runs {
         client {
@@ -68,11 +70,13 @@ dependencies {
     compileOnly "org.slf4j:slf4j-api:${slf4j_version}"
 }
 
-def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+def generateModMetadata = tasks.register('generateModMetadata', Sync) {
     def replaceProperties = [
             minecraft_version                  : minecraft_version,
             minecraft_version_range            : minecraft_version_range,
-            neo_version                        : neo_version,
+            neo_version                        : providers.gradleProperty('neoforge_version')
+                    .orElse(providers.gradleProperty('neoforge_dev_version'))
+                    .get(),
             neo_version_range                  : neo_version_range,
             forge_legacy_loader_version_range  : forge_legacy_loader_version_range,
             forge_legacy_version_range         : forge_legacy_version_range,
@@ -86,6 +90,7 @@ def generateModMetadata = tasks.register('generateModMetadata', ProcessResources
     inputs.properties replaceProperties
     expand replaceProperties
     from 'src/main/templates'
+    exclude 'META-INF/mods.toml'
     into layout.buildDirectory.dir('generated/sources/modMetadata')
 }
 
