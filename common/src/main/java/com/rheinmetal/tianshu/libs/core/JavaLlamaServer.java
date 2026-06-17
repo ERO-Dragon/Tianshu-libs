@@ -58,6 +58,7 @@ public class JavaLlamaServer {
                     chatLaneConfig,
                     taskLaneConfig,
                     config.gpuLayers,
+                    config.device,
                     modelAlias,
                     config.modelProfile,
                     config.cacheTypeK,
@@ -75,6 +76,7 @@ public class JavaLlamaServer {
                         config.embeddingContextSize,
                         config.embeddingThreads,
                         config.embeddingGpuLayers,
+                        config.embeddingDevice,
                         embeddingAlias
                 );
             }
@@ -232,12 +234,14 @@ public class JavaLlamaServer {
         copy.contextSize = source.contextSize;
         copy.threads = source.threads;
         copy.gpuLayers = source.gpuLayers;
+        copy.device = source.device;
         copy.modelAlias = source.modelAlias;
         copy.modelProfile = source.modelProfile;
         copy.embeddingModelPath = source.embeddingModelPath;
         copy.embeddingContextSize = source.embeddingContextSize;
         copy.embeddingThreads = source.embeddingThreads;
         copy.embeddingGpuLayers = source.embeddingGpuLayers;
+        copy.embeddingDevice = source.embeddingDevice;
         copy.embeddingAlias = source.embeddingAlias;
         copy.maxQueueSize = source.maxQueueSize;
         copy.chatContext = source.chatContext;
@@ -285,6 +289,11 @@ public class JavaLlamaServer {
             return this;
         }
 
+        public Builder device(String device) {
+            config.device = normalizeDevice(device);
+            return this;
+        }
+
         public Builder modelAlias(String name) {
             config.modelAlias = name;
             return this;
@@ -325,6 +334,11 @@ public class JavaLlamaServer {
             return this;
         }
 
+        public Builder embeddingDevice(String device) {
+            config.embeddingDevice = normalizeDevice(device);
+            return this;
+        }
+
         public Builder embeddingAlias(String name) {
             config.embeddingAlias = name;
             return this;
@@ -361,6 +375,11 @@ public class JavaLlamaServer {
             if (!taskContextExplicit) built.taskContext = built.chatContext;
             ServerConfig.validateOrThrow(built);
             return new JavaLlamaServer(built);
+        }
+
+        private static String normalizeDevice(String device) {
+            if (device == null || device.isBlank()) return null;
+            return device.trim();
         }
     }
 }

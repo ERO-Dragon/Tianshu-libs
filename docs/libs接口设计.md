@@ -28,6 +28,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .chatThreads(4)
     .chatMaxQueueSize(4)
     .gpuLayers(999)
+    .device("0")                         // 可选：传给 JJML ModelParam.device
     .cacheTypeK(KvCacheType.F16)          // 可选：F16 / Q8_0
     .cacheTypeV(KvCacheType.F16)          // 可选：F16 / Q8_0
     .taskContext(16000)                   // 可选；不设置时等于 chatContext
@@ -39,6 +40,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .embeddingContextSize(16000)
     .embeddingThreads(4)
     .embeddingGpuLayers(999)
+    .embeddingDevice("0")                 // 可选：embedding 模型加载设备
     .embeddingAlias("bge")
     .requestTimeoutSeconds(300)
     .build();

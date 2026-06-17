@@ -1,15 +1,13 @@
 package com.rheinmetal;
 
-import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
-import com.rheinmetal.tianshu.libs.nativelib.NativeApiSmokeTest;
+import com.rheinmetal.tianshu.libs.TianshuLibsBootstrap;
 import net.neoforged.fml.common.Mod;
 
 @Mod(TianshuLibsMod.MOD_ID)
 public class TianshuLibsMod {
-    public static final String MOD_ID = "tianshu_libs";
+    public static final String MOD_ID = TianshuLibsBootstrap.MOD_ID;
 
     public TianshuLibsMod() {
-        NativeLibraryLoader.ensureLoaded();
-        NativeApiSmokeTest.runOnce();
+        TianshuLibsBootstrap.initialize("neoforge");
     }
 }

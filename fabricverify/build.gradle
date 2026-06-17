@@ -1,0 +1,60 @@
+plugins {
+    id 'fabric-loom'
+}
+
+base {
+    archivesName = "${mod_id}-fabric-verify"
+}
+
+def verifyJavaVersion = providers.gradleProperty('fabric_verify_java_version')
+        .map { it as Integer }
+        .orElse(21)
+
+java {
+    toolchain.languageVersion = verifyJavaVersion.map { JavaLanguageVersion.of(it) }
+    sourceCompatibility = verifyJavaVersion.map { JavaVersion.toVersion(it) }.get()
+    targetCompatibility = verifyJavaVersion.map { JavaVersion.toVersion(it) }.get()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = verifyJavaVersion
+}
+
+loom {
+    runConfigs.configureEach {
+        ideConfigGenerated = false
+        runDir = 'run'
+    }
+}
+
+dependencies {
+    def verifyMinecraftVersion = providers.gradleProperty('fabric_verify_minecraft_version')
+            .orElse(providers.gradleProperty('minecraft_version'))
+    def verifyLoaderVersion = providers.gradleProperty('fabric_verify_loader_version')
+            .orElse(providers.gradleProperty('fabric_loader_version'))
+
+    minecraft "com.mojang:minecraft:${verifyMinecraftVersion.get()}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${verifyLoaderVersion.get()}"
+}
+
+def compatTarget = providers.gradleProperty('compat_target')
+        .orElse(providers.gradleProperty('fabric_verify_minecraft_version').map { "fabric-${it}" })
+        .orElse(providers.gradleProperty('minecraft_version').map { "fabric-${it}" })
+def stagedModsDir = compatTarget.map { target -> rootProject.layout.buildDirectory.dir("compat/${target}/mods").get() }
+
+def installStagedMods = tasks.register('installStagedFabricMods', Sync) {
+    dependsOn rootProject.tasks.named('stageCompatMatrix')
+    from stagedModsDir
+    into layout.projectDirectory.dir('run/mods')
+}
+
+tasks.named('runClient') {
+    dependsOn installStagedMods
+}
+
+tasks.register('verifyFabricClient') {
+    group = 'verification'
+    description = 'Starts a Fabric client with the staged universal jar installed.'
+    dependsOn tasks.named('runClient')
+}

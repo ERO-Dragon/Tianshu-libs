@@ -97,6 +97,13 @@ def generateFabricMetadata = tasks.register('generateFabricMetadata') {
 
     doLast {
         def nestedJars = [[file: "META-INF/jars/${jjmlJar.asFile.name}".toString()]]
+        def minecraftVersionRanges = fabricMetadataProperties.minecraft_version
+                .split(/\s*\|\|\s*/)
+                .collect { it.trim() }
+                .findAll { !it.isEmpty() }
+        def minecraftDependency = minecraftVersionRanges.size() == 1
+                ? minecraftVersionRanges[0]
+                : minecraftVersionRanges
 
         def metadata = [
                 schemaVersion: 1,
@@ -112,7 +119,7 @@ def generateFabricMetadata = tasks.register('generateFabricMetadata') {
                 jars         : nestedJars,
                 depends      : [
                         fabricloader: fabricMetadataProperties.fabricloader,
-                        minecraft   : fabricMetadataProperties.minecraft_version,
+                        minecraft   : minecraftDependency,
                         java        : '>=17'
                 ]
         ]

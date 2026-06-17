@@ -21,4 +21,14 @@ class ServerConfigTest {
                 .taskMaxQueueSize(6)
                 .build());
     }
+
+    @Test
+    void deviceOptionsCanBeConfigured() {
+        assertDoesNotThrow(() -> JavaLlamaServer.builder()
+                .model("dummy.gguf")
+                .device("1")
+                .embeddingModel("embedding.gguf")
+                .embeddingDevice("0")
+                .build());
+    }
 }
