@@ -460,6 +460,8 @@ class LlamaEngineInterruptIntegrationTest {
     }
 
     private JavaLlamaServer newService(int taskQueueSize, int contextSize) {
+        // taskQueueSize is kept only to avoid rewriting older integration cases;
+        // task suspend is now cold-only and does not retain hot KV slots.
         String model = System.getProperty("tianshu.llm.model");
         Path modelPath = Path.of(model);
         assertTrue(Files.isRegularFile(modelPath), "model not found: " + model);
@@ -467,12 +469,10 @@ class LlamaEngineInterruptIntegrationTest {
                 .model(model)
                 .modelAlias("integration-qwen3-0.6b")
                 .modelProfile("qwen3")
-                .chatContext(contextSize)
+                .contextSize(contextSize)
                 .chatThreads(2)
                 .chatMaxQueueSize(4)
-                .taskContext(contextSize)
                 .taskThreads(2)
-                .taskMaxQueueSize(taskQueueSize)
                 .taskSuspendOnChat(true)
                 .gpuLayers(999)
                 .requestTimeoutSeconds(300)

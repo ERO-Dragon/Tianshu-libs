@@ -3,6 +3,9 @@ package com.rheinmetal.tianshu.libs.core;
 import java.util.ArrayList;
 import java.util.List;
 
+import java.util.function.Consumer;
+
+import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
 
 public class ServerConfig {
@@ -10,7 +13,7 @@ public class ServerConfig {
     public static final int DEFAULT_THREAD_COUNT = Runtime.getRuntime().availableProcessors();
     public static final int DEFAULT_GPU_LAYERS = 999;
     public static final int DEFAULT_MAX_QUEUE_SIZE = 4;
-    public static final int DEFAULT_TASK_MAX_QUEUE_SIZE = 1;
+    public static final int TASK_HOT_SUSPEND_SLOTS = 0;
     public static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
 
     public String modelPath;
@@ -27,16 +30,14 @@ public class ServerConfig {
     public String embeddingDevice;
     public String embeddingAlias = "embedding";
     public int maxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
-    public int chatContext = DEFAULT_CONTEXT_SIZE;
     public int chatThreads = DEFAULT_THREAD_COUNT;
     public int chatMaxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
-    public int taskContext = DEFAULT_CONTEXT_SIZE;
     public int taskThreads = Math.max(1, Math.min(2, DEFAULT_THREAD_COUNT));
-    public int taskMaxQueueSize = DEFAULT_TASK_MAX_QUEUE_SIZE;
     public boolean taskSuspendOnChat = true;
     public KvCacheType cacheTypeK;
     public KvCacheType cacheTypeV;
     public int requestTimeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS;
+    public Consumer<InferenceEvent> inferenceEventListener;
 
     static void validateOrThrow(ServerConfig config) {
         List<String> errors = new ArrayList<>();
@@ -49,8 +50,6 @@ public class ServerConfig {
     private static void validate(ServerConfig config, List<String> errors) {
         if (config.modelPath == null || config.modelPath.isBlank()) errors.add("modelPath is required");
         range(config.contextSize, 512, 262144, "contextSize", errors);
-        range(config.chatContext, 512, 262144, "chatContext", errors);
-        range(config.taskContext, 512, 262144, "taskContext", errors);
         range(config.embeddingContextSize, 512, 262144, "embeddingContextSize", errors);
         range(config.threads, 1, 512, "threads", errors);
         range(config.chatThreads, 1, 512, "chatThreads", errors);
@@ -60,7 +59,6 @@ public class ServerConfig {
         range(config.embeddingGpuLayers, 0, 9999, "embeddingGpuLayers", errors);
         range(config.maxQueueSize, 1, 1024, "maxQueueSize", errors);
         range(config.chatMaxQueueSize, 1, 1024, "chatMaxQueueSize", errors);
-        range(config.taskMaxQueueSize, 0, 5, "taskMaxQueueSize", errors);
         range(config.requestTimeoutSeconds, 1, 3600, "requestTimeoutSeconds", errors);
     }
 

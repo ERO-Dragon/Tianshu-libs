@@ -185,5 +185,7 @@ universalJarTask.configure {
 
 tasks.named('build') {
     dependsOn tasks.named('validateUniversalNativeRuntime')
-    dependsOn tasks.named('verifyCompatMatrix')
+    if (providers.gradleProperty('includeVerifyProjects').map { it.toBoolean() }.orElse(false).get()) {
+        dependsOn tasks.named('verifyCompatMatrix')
+    }
 }

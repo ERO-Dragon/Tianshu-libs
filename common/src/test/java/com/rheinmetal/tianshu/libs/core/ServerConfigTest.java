@@ -7,18 +7,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ServerConfigTest {
     @Test
-    void taskHotSuspendSlotsCanBeZero() {
+    void contextSizeCanBeConfiguredOnceForChatAndTask() {
         assertDoesNotThrow(() -> JavaLlamaServer.builder()
                 .model("dummy.gguf")
-                .taskMaxQueueSize(0)
+                .contextSize(8192)
                 .build());
     }
 
     @Test
-    void taskHotSuspendSlotsAreCappedAtFive() {
+    void contextSizeRejectsInvalidValues() {
         assertThrows(ServerConfig.ConfigException.class, () -> JavaLlamaServer.builder()
                 .model("dummy.gguf")
-                .taskMaxQueueSize(6)
+                .contextSize(128)
                 .build());
     }
 

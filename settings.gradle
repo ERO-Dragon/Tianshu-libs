@@ -16,6 +16,9 @@ rootProject.name = 'tianshu-libs'
 include 'common'
 include 'neoforge'
 include 'fabric'
-include 'fabricverify'
-include 'forgeverify'
-include 'neoforgeverify'
+
+if (providers.gradleProperty('includeVerifyProjects').map { it.toBoolean() }.orElse(false).get()) {
+    include 'fabricverify'
+    include 'forgeverify'
+    include 'neoforgeverify'
+}

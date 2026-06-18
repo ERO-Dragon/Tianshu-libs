@@ -15,7 +15,6 @@ import java.util.function.Consumer;
 public class TaskExecutor implements Runnable {
 
     private final LlamaEngine engine;
-    private final List<SuspendedTask> suspendedTasks = new ArrayList<>();
     private final Map<InferenceTask, SuspendedTask> coldTasks = new IdentityHashMap<>();
 
     public TaskExecutor(LlamaEngine engine) {
@@ -34,12 +33,14 @@ public class TaskExecutor implements Runnable {
                     task.cancel();
                     task.getSyncFuture().cancel(false);
                     closeSuspendedTask(task);
+                    engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled because engine stopped.");
                     engine.finishTask(task);
                     break;
                 }
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
                     closeSuspendedTask(task);
+                    engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled before execution.");
                     engine.finishTask(task);
                     continue;
                 }
@@ -72,98 +73,41 @@ public class TaskExecutor implements Runnable {
         InferenceTask chatTask = engine.pollChatTaskNonBlocking();
         if (chatTask != null) return chatTask;
         
-        SuspendedTask suspended = selectBestSuspendedTask();
-        int queuedPriority = engine.peekTaskPriority();
-        
         InferenceTask taskTask = engine.pollTaskTask();
-        if (taskTask != null) {
-            if (suspended != null && suspended.task.getTaskPriority() >= queuedPriority && 
-                suspended.task.getTaskPriority() >= taskTask.getTaskPriority()) {
-                engine.requeueTask(taskTask);
-                return suspended.task;
-            }
-            return taskTask;
-        }
-        
-        if (suspended != null) {
-            return suspended.task;
-        }
+        if (taskTask != null) return taskTask;
         
         engine.awaitTaskArrival();
         return null;
     }
 
-    private SuspendedTask selectBestSuspendedTask() {
-        purgeCancelledSuspendedTasks();
-        SuspendedTask best = null;
-        for (SuspendedTask suspended : suspendedTasks) {
-            if (best == null || suspended.task.getTaskPriority() > best.task.getTaskPriority()) {
-                best = suspended;
-            }
-        }
-        return best;
-    }
-
     private SuspendedTask findSuspendedTask(InferenceTask task) {
-        for (SuspendedTask suspended : suspendedTasks) {
-            if (suspended.task == task) return suspended;
-        }
         SuspendedTask cold = coldTasks.get(task);
         if (cold != null) return cold;
         return null;
     }
 
     private void parkSuspendedTask(SuspendedTask state) {
-        if (!state.hot) {
-            engine.requeueTask(state.task);
-            return;
-        }
-        if (!suspendedTasks.contains(state)) suspendedTasks.add(state);
-        enforceHotSuspendLimit();
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        coldParkSuspendedTask(state);
     }
 
     private void coldParkSuspendedTask(SuspendedTask state) {
         state.coolDown();
         coldTasks.put(state.task, state);
+        engine.publishInferenceEvent(
+                state.task,
+                InferenceEventType.SUSPENDED,
+                "Task was suspended and will be cold-resumed later.",
+                state.replayCharacters(),
+                state.generatedTokens,
+                null
+        );
         engine.requeueTask(state.task);
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
-    }
-
-    private void enforceHotSuspendLimit() {
-        int limit = Math.max(0, engine.getHotSuspendLimit());
-        while (suspendedTasks.size() > limit) {
-            int coldIndex = indexOfLowestPrioritySuspendedTask();
-            if (coldIndex < 0) return;
-            SuspendedTask cold = suspendedTasks.remove(coldIndex);
-            coldParkSuspendedTask(cold);
-        }
-    }
-
-    private int indexOfLowestPrioritySuspendedTask() {
-        int bestIndex = -1;
-        for (int i = 0; i < suspendedTasks.size(); i++) {
-            SuspendedTask candidate = suspendedTasks.get(i);
-            if (bestIndex < 0
-                    || candidate.task.getTaskPriority() < suspendedTasks.get(bestIndex).task.getTaskPriority()) {
-                bestIndex = i;
-            }
-        }
-        return bestIndex;
+        engine.setTaskSuspended(hasSuspendedTasks());
     }
 
     private void purgeCancelledSuspendedTasks() {
-        for (int i = suspendedTasks.size() - 1; i >= 0; i--) {
-            SuspendedTask suspended = suspendedTasks.get(i);
-            if (!suspended.task.isCancelled()) continue;
-            suspendedTasks.remove(i);
-            coldTasks.remove(suspended.task);
-            suspended.task.getSyncFuture().cancel(false);
-            suspended.close();
-            engine.finishTask(suspended.task);
-        }
         purgeCancelledColdTasks();
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        engine.setTaskSuspended(hasSuspendedTasks());
     }
 
     private void purgeCancelledColdTasks() {
@@ -173,6 +117,7 @@ public class TaskExecutor implements Runnable {
             cancelled.add(entry.getKey());
             entry.getValue().close();
             entry.getKey().getSyncFuture().cancel(false);
+            engine.publishInferenceEvent(entry.getKey(), InferenceEventType.CANCELLED, "Task was cancelled while suspended.");
             engine.finishTask(entry.getKey());
         }
         for (InferenceTask task : cancelled) {
@@ -181,10 +126,6 @@ public class TaskExecutor implements Runnable {
     }
 
     private SuspendedTask removeSuspendedTask(InferenceTask task) {
-        for (int i = 0; i < suspendedTasks.size(); i++) {
-            SuspendedTask suspended = suspendedTasks.get(i);
-            if (suspended.task == task) return suspendedTasks.remove(i);
-        }
         SuspendedTask cold = coldTasks.remove(task);
         if (cold != null) return cold;
         return null;
@@ -197,6 +138,7 @@ public class TaskExecutor implements Runnable {
         try {
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
+                engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
@@ -215,9 +157,10 @@ public class TaskExecutor implements Runnable {
             System.err.println("[TaskExecutor] Task " + task.getTaskId() + " failed: " + e.getMessage());
             e.printStackTrace();
             task.getSyncFuture().completeExceptionally(e);
-            if (!suspendedTasks.isEmpty() && findSuspendedTask(task) != null) {
+            engine.publishInferenceEvent(task, InferenceEventType.FAILED, "Inference failed: " + e.getMessage(), e);
+            if (findSuspendedTask(task) != null) {
                 closeSuspendedTask(task);
-                engine.setTaskSuspended(!suspendedTasks.isEmpty());
+                engine.setTaskSuspended(hasSuspendedTasks());
             }
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
@@ -258,7 +201,11 @@ public class TaskExecutor implements Runnable {
     private ExecutionResult doChatInference(LlamaCppContext context, LlamaCppSamplerChain chain, InferenceTask task) throws IOException {
         try {
             FormattedPromptProcessor processor = new FormattedPromptProcessor(context, chain);
+            engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Chat inference started.");
+            engine.publishInferenceEvent(task, InferenceEventType.PREFILL_STARTED, "Chat prefill started.");
             writeMessages(processor, task);
+            engine.publishInferenceEvent(task, InferenceEventType.PREFILL_COMPLETED, "Chat prefill completed.");
+            engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Chat generation started.");
 
             StringBuilder fullResponse = new StringBuilder();
             ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
@@ -279,10 +226,12 @@ public class TaskExecutor implements Runnable {
 
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
+                engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Chat inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
             task.getSyncFuture().complete(fullResponse.toString());
+            engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Chat inference completed.", 0, generatedTokens, null);
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
         } finally {
@@ -292,8 +241,21 @@ public class TaskExecutor implements Runnable {
 
     private ExecutionResult doTaskInference(InferenceTask task) throws IOException {
         SuspendedTask state = removeSuspendedTask(task);
+        boolean resumed = state != null;
         if (state == null) state = new SuspendedTask(task);
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        engine.setTaskSuspended(hasSuspendedTasks());
+        if (resumed) {
+            engine.publishInferenceEvent(
+                    task,
+                    InferenceEventType.COLD_RESUME_STARTED,
+                    "Task cold resume started; previous output will be replayed before generation continues.",
+                    state.replayCharacters(),
+                    state.generatedTokens,
+                    null
+            );
+        } else {
+            engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Task inference started.");
+        }
         try {
             if (state.processor == null) {
                 state.context = engine.createContext(task.getLane());
@@ -302,9 +264,35 @@ public class TaskExecutor implements Runnable {
                 if (state.formattedPrompt == null) {
                     state.formattedPrompt = formatMessages(task);
                 }
+                engine.publishInferenceEvent(
+                        task,
+                        InferenceEventType.PREFILL_STARTED,
+                        resumed ? "Task cold replay/prefill started." : "Task prefill started.",
+                        state.replayCharacters(),
+                        state.generatedTokens,
+                        null
+                );
                 state.processor.writePreFormatted(state.formattedPrompt + state.rawGeneratedText);
-                state.hot = true;
+                engine.publishInferenceEvent(
+                        task,
+                        InferenceEventType.PREFILL_COMPLETED,
+                        resumed ? "Task cold replay/prefill completed." : "Task prefill completed.",
+                        state.replayCharacters(),
+                        state.generatedTokens,
+                        null
+                );
+                if (resumed) {
+                    engine.publishInferenceEvent(
+                            task,
+                            InferenceEventType.COLD_RESUME_COMPLETED,
+                            "Task cold resume completed; generation can continue.",
+                            state.replayCharacters(),
+                            state.generatedTokens,
+                            null
+                    );
+                }
             }
+            engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Task generation started.", state.replayCharacters(), state.generatedTokens, null);
 
             FormattedPromptProcessor processor = state.processor;
             Consumer<String> callback = task.getStreamCallback();
@@ -314,6 +302,7 @@ public class TaskExecutor implements Runnable {
                     task.getSyncFuture().cancel(false);
                     clearSuspendedTask(task);
                     state.close();
+                    engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Task inference was cancelled.", state.replayCharacters(), state.generatedTokens, null);
                     engine.finishTask(task);
                     return ExecutionResult.COMPLETED;
                 }
@@ -336,6 +325,7 @@ public class TaskExecutor implements Runnable {
             task.getSyncFuture().complete(state.generatedText.toString());
             clearSuspendedTask(task);
             state.close();
+            engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Task inference completed.", state.replayCharacters(), state.generatedTokens, null);
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
         } catch (RuntimeException e) {
@@ -401,24 +391,29 @@ public class TaskExecutor implements Runnable {
 
     private void clearSuspendedTask(InferenceTask task) {
         removeSuspendedTask(task);
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        engine.setTaskSuspended(hasSuspendedTasks());
     }
 
     private void closeSuspendedTask(InferenceTask task) {
         SuspendedTask suspended = removeSuspendedTask(task);
         if (suspended != null) suspended.close();
-        engine.setTaskSuspended(!suspendedTasks.isEmpty());
+        engine.setTaskSuspended(hasSuspendedTasks());
     }
 
     private void cancelSuspendedTasks() {
-        for (SuspendedTask suspended : suspendedTasks) {
+        for (SuspendedTask suspended : coldTasks.values()) {
             suspended.task.cancel();
             suspended.task.getSyncFuture().cancel(false);
             suspended.close();
+            engine.publishInferenceEvent(suspended.task, InferenceEventType.CANCELLED, "Task was cancelled during shutdown.");
             engine.finishTask(suspended.task);
         }
-        suspendedTasks.clear();
+        coldTasks.clear();
         engine.setTaskSuspended(false);
+    }
+
+    private boolean hasSuspendedTasks() {
+        return !coldTasks.isEmpty();
     }
 
     private enum ExecutionResult {
@@ -436,7 +431,6 @@ public class TaskExecutor implements Runnable {
         private LlamaCppSamplerChain chain;
         private FormattedPromptProcessor processor;
         private int generatedTokens;
-        private boolean hot;
 
         private SuspendedTask(InferenceTask task) {
             this.task = task;
@@ -449,11 +443,15 @@ public class TaskExecutor implements Runnable {
                 try { context.close(); } catch (Exception ignored) {}
                 context = null;
             }
-            hot = false;
         }
 
         private void coolDown() {
             close();
+        }
+
+        private int replayCharacters() {
+            int promptLength = formattedPrompt == null ? 0 : formattedPrompt.length();
+            return promptLength + rawGeneratedText.length();
         }
     }
 }

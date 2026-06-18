@@ -18,6 +18,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 public class LlamaEngine {
 
@@ -32,6 +33,7 @@ public class LlamaEngine {
     private final KvCacheType cacheTypeK;
     private final KvCacheType cacheTypeV;
     private final boolean taskSuspendOnChat;
+    private final Consumer<InferenceEvent> inferenceEventListener;
 
     private final LinkedBlockingQueue<InferenceTask> chatQueue;
     private final PriorityBlockingQueue<PrioritizedInferenceTask> taskQueue;
@@ -58,7 +60,8 @@ public class LlamaEngine {
                         String modelProfile,
                         KvCacheType cacheTypeK,
                         KvCacheType cacheTypeV,
-                        boolean taskSuspendOnChat) {
+                        boolean taskSuspendOnChat,
+                        Consumer<InferenceEvent> inferenceEventListener) {
         this.engineName = engineName;
         this.model = model;
         this.chatLaneConfig = chatLaneConfig;
@@ -70,6 +73,7 @@ public class LlamaEngine {
         this.cacheTypeK = cacheTypeK;
         this.cacheTypeV = cacheTypeV;
         this.taskSuspendOnChat = taskSuspendOnChat;
+        this.inferenceEventListener = inferenceEventListener;
         this.chatQueue = new LinkedBlockingQueue<>(chatLaneConfig.getMaxQueueSize());
         this.taskQueue = new PriorityBlockingQueue<>();
         this.inferenceExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -92,8 +96,8 @@ public class LlamaEngine {
     public static LlamaEngine loadChatEngine(String modelPath, int contextSize, int threadCount,
                                              int gpuLayers, String device, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
         LaneConfig chatLane = new LaneConfig(InferenceLane.CHAT, contextSize, threadCount, maxQueueSize);
-        LaneConfig taskLane = new LaneConfig(InferenceLane.TASK, contextSize, Math.max(1, threadCount), 1);
-        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, device, modelAlias, modelProfile, null, null, true);
+        LaneConfig taskLane = new LaneConfig(InferenceLane.TASK, contextSize, Math.max(1, threadCount), 0);
+        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, device, modelAlias, modelProfile, null, null, true, null);
     }
 
     public static LlamaEngine loadChatEngine(String modelPath,
@@ -105,11 +109,12 @@ public class LlamaEngine {
                                              String modelProfile,
                                              KvCacheType cacheTypeK,
                                              KvCacheType cacheTypeV,
-                                             boolean taskSuspendOnChat) throws Exception {
+                                             boolean taskSuspendOnChat,
+                                             Consumer<InferenceEvent> inferenceEventListener) throws Exception {
         LlamaCppModel model = loadModel("chat", modelPath, gpuLayers, device);
         String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
         System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
-        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat);
+        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat, inferenceEventListener);
         engine.startWorker();
         return engine;
     }
@@ -170,6 +175,7 @@ public class LlamaEngine {
                 pendingChatTasks.decrementAndGet();
                 throw new RejectedExecutionException("chat inference queue is full");
             }
+            publishInferenceEvent(task, InferenceEventType.QUEUED, "Chat request queued.");
             notifyTaskArrival();
             return;
         }
@@ -178,6 +184,7 @@ public class LlamaEngine {
         if (!accepted) {
             throw new RejectedExecutionException("task inference queue is full");
         }
+        publishInferenceEvent(task, InferenceEventType.QUEUED, "Task request queued.");
         notifyTaskArrival();
     }
 
@@ -204,8 +211,10 @@ public class LlamaEngine {
                 task.getSyncFuture().completeExceptionally(new RejectedExecutionException("chat inference queue is full"));
                 return;
             }
+            publishInferenceEvent(task, InferenceEventType.QUEUED, "Chat request requeued.");
         } else {
             taskQueue.offer(new PrioritizedInferenceTask(task));
+            publishInferenceEvent(task, InferenceEventType.QUEUED, "Task request requeued.");
         }
         notifyTaskArrival();
     }
@@ -217,6 +226,7 @@ public class LlamaEngine {
             if (chatQueue.remove(task)) {
                 pendingChatTasks.decrementAndGet();
                 task.getSyncFuture().cancel(false);
+                publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued chat request was cancelled.");
                 return;
             }
             notifyTaskArrival();
@@ -225,6 +235,7 @@ public class LlamaEngine {
         boolean removed = taskQueue.removeIf(queued -> queued.wraps(task));
         if (removed) {
             task.getSyncFuture().cancel(false);
+            publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled.");
             finishTask(task);
             notifyTaskArrival();
             return;
@@ -241,6 +252,38 @@ public class LlamaEngine {
 
     int getHotSuspendLimit() {
         return taskLaneConfig.getMaxQueueSize();
+    }
+
+    void publishInferenceEvent(InferenceTask task, InferenceEventType type, String message) {
+        publishInferenceEvent(task, type, message, 0, 0, null);
+    }
+
+    void publishInferenceEvent(InferenceTask task, InferenceEventType type, String message, Throwable error) {
+        publishInferenceEvent(task, type, message, 0, 0, error);
+    }
+
+    void publishInferenceEvent(InferenceTask task,
+                               InferenceEventType type,
+                               String message,
+                               int replayCharacters,
+                               int generatedTokens,
+                               Throwable error) {
+        Consumer<InferenceEvent> listener = inferenceEventListener;
+        if (listener == null || task == null) return;
+        try {
+            listener.accept(new InferenceEvent(
+                    task.getTaskId(),
+                    task.getTaskType(),
+                    task.getLane(),
+                    task.getTaskPriority(),
+                    type,
+                    message,
+                    replayCharacters,
+                    generatedTokens,
+                    error
+            ));
+        } catch (Exception ignored) {
+        }
     }
 
     void notifyTaskArrival() {
@@ -326,6 +369,7 @@ public class LlamaEngine {
         if (active != null) {
             active.cancel();
             active.getSyncFuture().cancel(false);
+            publishInferenceEvent(active, InferenceEventType.CANCELLED, "Active inference was cancelled during shutdown.");
             finishTask(active);
         }
         cancelQueuedTasks();
@@ -357,6 +401,7 @@ public class LlamaEngine {
             pendingChatTasks.decrementAndGet();
             chatTask.cancel();
             chatTask.getSyncFuture().cancel(false);
+            publishInferenceEvent(chatTask, InferenceEventType.CANCELLED, "Queued chat request was cancelled during shutdown.");
         }
 
         PrioritizedInferenceTask taskTask;
@@ -364,6 +409,7 @@ public class LlamaEngine {
             InferenceTask task = taskTask.getTask();
             task.cancel();
             task.getSyncFuture().cancel(false);
+            publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled during shutdown.");
             finishTask(task);
         }
     }

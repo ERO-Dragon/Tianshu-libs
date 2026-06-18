@@ -82,6 +82,7 @@ function Get-RunProject([string] $loader) {
 function Get-GradleArgs([string] $target, $spec) {
     $project = Get-RunProject $spec.loader
     $args = @()
+    $args += "-PincludeVerifyProjects=true"
     $args += "-Pcompat_target=$target"
 
     switch ($spec.loader) {

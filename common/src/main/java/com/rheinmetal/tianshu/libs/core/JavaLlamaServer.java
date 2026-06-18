@@ -2,6 +2,7 @@ package com.rheinmetal.tianshu.libs.core;
 
 import com.rheinmetal.tianshu.libs.llm.ChatMessage;
 import com.rheinmetal.tianshu.libs.llm.EmbeddingEngine;
+import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
 import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
 import com.rheinmetal.tianshu.libs.llm.LaneConfig;
@@ -51,8 +52,8 @@ public class JavaLlamaServer {
                 modelAlias = extractFileName(config.modelPath);
             }
 
-            LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.chatContext, config.chatThreads, config.chatMaxQueueSize);
-            LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.taskContext, config.taskThreads, config.taskMaxQueueSize);
+            LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.contextSize, config.chatThreads, config.chatMaxQueueSize);
+            LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.contextSize, config.taskThreads, ServerConfig.TASK_HOT_SUSPEND_SLOTS);
             engine = LlamaEngine.loadChatEngine(
                     config.modelPath,
                     chatLaneConfig,
@@ -63,7 +64,8 @@ public class JavaLlamaServer {
                     config.modelProfile,
                     config.cacheTypeK,
                     config.cacheTypeV,
-                    config.taskSuspendOnChat
+                    config.taskSuspendOnChat,
+                    config.inferenceEventListener
             );
 
             if (config.embeddingModelPath != null && !config.embeddingModelPath.isBlank()) {
@@ -244,30 +246,26 @@ public class JavaLlamaServer {
         copy.embeddingDevice = source.embeddingDevice;
         copy.embeddingAlias = source.embeddingAlias;
         copy.maxQueueSize = source.maxQueueSize;
-        copy.chatContext = source.chatContext;
         copy.chatThreads = source.chatThreads;
         copy.chatMaxQueueSize = source.chatMaxQueueSize;
-        copy.taskContext = source.taskContext;
         copy.taskThreads = source.taskThreads;
-        copy.taskMaxQueueSize = source.taskMaxQueueSize;
         copy.taskSuspendOnChat = source.taskSuspendOnChat;
         copy.cacheTypeK = source.cacheTypeK;
         copy.cacheTypeV = source.cacheTypeV;
         copy.requestTimeoutSeconds = source.requestTimeoutSeconds;
+        copy.inferenceEventListener = source.inferenceEventListener;
         return copy;
     }
 
     public static class Builder {
         private final ServerConfig config = new ServerConfig();
-        private boolean taskContextExplicit;
 
         public Builder model(String path) {
             config.modelPath = path;
             return this;
         }
 
-        public Builder chatContext(int n) {
-            config.chatContext = n;
+        public Builder contextSize(int n) {
             config.contextSize = n;
             return this;
         }
@@ -344,19 +342,8 @@ public class JavaLlamaServer {
             return this;
         }
 
-        public Builder taskContext(int n) {
-            config.taskContext = n;
-            taskContextExplicit = true;
-            return this;
-        }
-
         public Builder taskThreads(int n) {
             config.taskThreads = n;
-            return this;
-        }
-
-        public Builder taskMaxQueueSize(int n) {
-            config.taskMaxQueueSize = n;
             return this;
         }
 
@@ -370,9 +357,13 @@ public class JavaLlamaServer {
             return this;
         }
 
+        public Builder inferenceEventListener(Consumer<InferenceEvent> listener) {
+            config.inferenceEventListener = listener;
+            return this;
+        }
+
         public JavaLlamaServer build() {
             ServerConfig built = copyConfig(config);
-            if (!taskContextExplicit) built.taskContext = built.chatContext;
             ServerConfig.validateOrThrow(built);
             return new JavaLlamaServer(built);
         }

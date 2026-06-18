@@ -24,18 +24,18 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .model("models/qwen3.5-4b.gguf")      // 必填：LLM 模型
     .modelAlias("qwen3.5-4b")             // 可选：模型别名
     .modelProfile("auto")                 // 可选：auto / qwen3 / qwen3.5 / deepseek-r1 / generic
-    .chatContext(16000)
+    .contextSize(16000)                   // LLM 上下文窗口；CHAT / TASK 共用同一个配置
     .chatThreads(4)
     .chatMaxQueueSize(4)
     .gpuLayers(999)
     .device("0")                         // 可选：传给 JJML ModelParam.device
     .cacheTypeK(KvCacheType.F16)          // 可选：F16 / Q8_0
     .cacheTypeV(KvCacheType.F16)          // 可选：F16 / Q8_0
-    .taskContext(16000)                   // 可选；不设置时等于 chatContext
     .taskThreads(2)
-    // taskMaxQueueSize range: 0..5; 0 means no HOT KV/context slot, suspended TASKs go COLD.
-    .taskMaxQueueSize(1)                 // TASK 热挂起槽数量；控制最多保留多少个 TASK KV/context
     .taskSuspendOnChat(true)
+    .inferenceEventListener(event -> {    // 可选：CHAT / TASK 统一推理状态事件
+        // event.getType(), event.getLane(), event.getReplayCharacters()
+    })
     .embeddingModel("models/bge.gguf")    // 可选：不配置则 embed/search 不可用
     .embeddingContextSize(16000)
     .embeddingThreads(4)
@@ -75,7 +75,47 @@ CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, Consumer<String> tokenConsumer);
 ```
 
-### 2.1.1 推理输出归一化（内部行为）
+### 2.1.1 推理状态事件
+
+`inferenceEventListener` 可用于把推理状态反馈给上层 UI。事件不会混入模型 token 输出，不设置 listener 时没有业务影响。
+
+```java
+public class InferenceEvent {
+    String getTaskId();
+    InferenceTask.TaskType getTaskType();
+    InferenceLane getLane();              // CHAT / TASK
+    int getPriority();
+    InferenceEventType getType();
+    String getMessage();
+    int getReplayCharacters();            // 冷恢复 replay 的字符量估计
+    int getGeneratedTokens();
+    Throwable getError();
+    boolean isChat();
+    boolean isTask();
+}
+
+public enum InferenceEventType {
+    QUEUED,
+    STARTED,
+    COLD_RESUME_STARTED,
+    COLD_RESUME_COMPLETED,
+    PREFILL_STARTED,
+    PREFILL_COMPLETED,
+    GENERATION_STARTED,
+    SUSPENDED,
+    COMPLETED,
+    CANCELLED,
+    FAILED
+}
+```
+
+常见事件序列：
+
+- CHAT：`QUEUED -> STARTED -> PREFILL_STARTED -> PREFILL_COMPLETED -> GENERATION_STARTED -> COMPLETED`
+- 新 TASK：`QUEUED -> STARTED -> PREFILL_STARTED -> PREFILL_COMPLETED -> GENERATION_STARTED -> COMPLETED`
+- 被打断 TASK：`... -> SUSPENDED -> QUEUED -> COLD_RESUME_STARTED -> PREFILL_STARTED -> PREFILL_COMPLETED -> COLD_RESUME_COMPLETED -> GENERATION_STARTED -> COMPLETED`
+
+### 2.1.2 推理输出归一化（内部行为）
 
 libs 不新增或改变上述调用方法；所有归一化都发生在内部 token 输出边界，对 `chat` / `chatStream` / `task` / `taskStream` 统一生效。
 
@@ -122,10 +162,10 @@ List<RagSearchResult> search(String queryText, List<String> texts);
 - CHAT 通道优先级高于 TASK
 - CHAT 请求会挂起正在执行的 TASK 任务（`taskSuspendOnChat=true`）
 - TASK 任务在 `preemptible=true` 时可被更高优先级 TASK 抢占
-- TASK 逻辑队列按 priority + FIFO 排序；`taskMaxQueueSize` 不限制 TASK 接收数量，而是限制最多保留多少个热挂起 TASK 的 KV/context。
-- 热挂起（HOT）：保留当前 `LlamaCppContext` / sampler / processor，恢复最快，连续性最好。
-- 冷挂起（COLD）：当热挂起槽已满时，关闭 KV/context，只保留 prompt、模型原始已生成文本和归一化输出状态，并回到 TASK 队列。恢复时通过 replay `prompt + rawGeneratedText` 重建上下文，再继续生成。
-- COLD 恢复语义上会接上已生成内容，但不承诺与 HOT 恢复保持逐 token / bit-level 完全一致；若需要最高连续性，应增大 `taskMaxQueueSize` 以保留更多 HOT 挂起任务。
+- TASK 逻辑队列按 priority + FIFO 排序；TASK 接收不受热挂起槽数量限制。
+- TASK 挂起只使用冷挂起（COLD）：关闭当前 `LlamaCppContext` / KV，只保留 prompt、模型原始已生成文本和归一化输出状态，并回到 TASK 队列。
+- COLD 恢复时通过 replay `prompt + rawGeneratedText` 重建上下文，再继续生成；这会增加恢复时延，但不会为挂起任务额外保留 KV 显存。
+- 如果 chat 在 COLD replay 期间到达，JJML 当前高层 API 无法可靠分片中断 replay，chat 需要等本次 replay 返回到可检查点后再执行；上层可通过 `inferenceEventListener` 的 `COLD_RESUME_STARTED/PREFILL_COMPLETED/COLD_RESUME_COMPLETED` 在 UI 中提示“后台任务恢复中可能稍慢”。
 
 ---
 
@@ -209,7 +249,7 @@ boolean hasQueueCapacity(); // 等价于 hasChatQueueCapacity()
 int getChatQueueSize();
 
 // hasTaskQueueCapacity 对 TASK 逻辑队列通常返回 true；
-// taskMaxQueueSize 表示热挂起 KV/context 保存槽，不再表示最大接收任务数。
+// TASK 挂起不保留热 KV/context，恢复时冷 replay。
 
 // 关闭服务
 void shutdown();
