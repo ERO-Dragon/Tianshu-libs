@@ -27,14 +27,19 @@ public final class NativeLibraryLoader {
     private static final String EXTERNAL_MANIFEST = "META-INF/native-libs.txt";
     private static final String TEMP_DIR_NAME = "javallamaserver-natives";
     private static final Duration STALE_DIR_TTL = Duration.ofDays(7);
-    private static final List<String> JJML_ENTRYPOINT_LIBRARIES = List.of(
-            "ggml.dll",
-            "llama.dll",
-            "whisper.dll",
+    private static final List<String> JJML_JNI_ENTRYPOINT_LIBRARIES = List.of(
             "Java_org_argeo_jjml_ggml.dll",
             "Java_org_argeo_jjml_llm.dll",
             "Java_org_argeo_jjml_mtmd.dll",
             "Java_org_argeo_jjml_whisper.dll"
+    );
+    private static final List<String> JJML_CORE_DEPENDENCY_LOAD_ORDER = List.of(
+            "ggml-base.dll",
+            "ggml.dll",
+            "llama.dll",
+            "llama-common.dll",
+            "whisper.dll",
+            "parakeet.dll"
     );
 
     private static final AtomicBoolean LOADED = new AtomicBoolean(false);
@@ -296,7 +301,7 @@ public final class NativeLibraryLoader {
     private static boolean isManagedByJjml(NativeLib lib) {
         if (lib.source != LibSource.JJML) return false;
         if (isJjmlBackendPlugin(lib.targetName)) return true;
-        for (String libraryName : JJML_ENTRYPOINT_LIBRARIES) {
+        for (String libraryName : JJML_JNI_ENTRYPOINT_LIBRARIES) {
             if (libraryName.equalsIgnoreCase(lib.targetName)) return true;
         }
         return false;
@@ -330,7 +335,10 @@ public final class NativeLibraryLoader {
     }
 
     private static int computeLoadPriority(NativeLib lib) {
-        if (lib.source == LibSource.JJML) return 1;
+        if (lib.source == LibSource.JJML) {
+            int priority = jjmlCoreDependencyPriority(lib.targetName);
+            return priority >= 0 ? priority : 50;
+        }
         if (lib.source == LibSource.SHERPA_ORT) return 10;
         if (lib.source == LibSource.ORT_PROVIDERS) return 20;
         if (lib.source == LibSource.ORT_JNI) return 30;
@@ -339,6 +347,15 @@ public final class NativeLibraryLoader {
         if (name.contains("onnxruntime")) return 15;
         if (name.endsWith("-jni.dll")) return 50;
         return 100;
+    }
+
+    private static int jjmlCoreDependencyPriority(String fileName) {
+        for (int i = 0; i < JJML_CORE_DEPENDENCY_LOAD_ORDER.size(); i++) {
+            if (JJML_CORE_DEPENDENCY_LOAD_ORDER.get(i).equalsIgnoreCase(fileName)) {
+                return i + 1;
+            }
+        }
+        return -1;
     }
 
     private static String computeFingerprint(List<NativeLib> libraries) throws Exception {
