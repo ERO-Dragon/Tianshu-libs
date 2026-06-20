@@ -56,6 +56,29 @@ tasks.register('manualNoThinkChat', JavaExec) {
     systemProperty 'tianshu.llm.maxTurns', System.getProperty('tianshu.llm.maxTurns', '6')
 }
 
+tasks.register('manualLatencyBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Measures TTFT, generation throughput, and GPU memory for a local GGUF model.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualLatencyBenchmark'
+    systemProperty 'tianshu.llm.model', System.getProperty(
+            'tianshu.llm.model',
+            'D:\\Minecraft\\Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf'
+    )
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.llm.maxTokens', System.getProperty('tianshu.llm.maxTokens', '128')
+    systemProperty 'tianshu.llm.promptChars', System.getProperty('tianshu.llm.promptChars', '24000')
+    systemProperty 'tianshu.llm.warmup', System.getProperty('tianshu.llm.warmup', '1')
+    systemProperty 'tianshu.llm.runs', System.getProperty('tianshu.llm.runs', '3')
+    systemProperty 'tianshu.llm.chatThreads', System.getProperty('tianshu.llm.chatThreads', '4')
+    systemProperty 'tianshu.llm.gpuIndex', System.getProperty('tianshu.llm.gpuIndex', '0')
+    systemProperty 'tianshu.llm.modelProfile', System.getProperty('tianshu.llm.modelProfile', 'auto')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
+    systemProperty 'tianshu.llm.temperature', System.getProperty('tianshu.llm.temperature', '0.0')
+    systemProperty 'tianshu.llm.enableThinking', System.getProperty('tianshu.llm.enableThinking', 'false')
+}
+
 def generateNativeManifest = tasks.register('generateNativeManifest') {
     def nativeDir = layout.projectDirectory.dir('src/main/resources/natives/windows-x86_64')
     inputs.dir nativeDir

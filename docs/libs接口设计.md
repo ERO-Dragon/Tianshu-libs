@@ -64,8 +64,10 @@ String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens);
 
 // 流式聊天
 void chatStream(String message, String systemPrompt, Consumer<String> onToken);
+void chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken);
 void chatStream(List<ChatMessage> messages, Consumer<String> onToken);
 void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken);
+void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken);
 
 // 后台任务（可被 chat 暂停）- 同步返回
 CompletableFuture<String> task(List<ChatMessage> messages);

@@ -138,8 +138,20 @@ public class JavaLlamaServer {
         chatStream(toMessages(message, systemPrompt), null, onToken);
     }
 
+    public void chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken) throws Exception {
+        chatStream(toMessages(message, systemPrompt), null, maxTokens, onToken);
+    }
+
+    public void chatStream(List<ChatMessage> messages, Consumer<String> onToken) throws Exception {
+        chatStream(messages, null, onToken);
+    }
+
     public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
         requireLibsApi().chatStream(messages, sampler, onToken);
+    }
+
+    public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken) throws Exception {
+        requireLibsApi().chatStream(messages, sampler, maxTokens, onToken);
     }
 
     public CompletableFuture<String> task(List<ChatMessage> messages,

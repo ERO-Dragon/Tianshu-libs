@@ -86,7 +86,11 @@ public class LibsApi {
     }
 
     public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
-        StreamResult result = doStreamChat(InferenceLane.CHAT, messages, sampler, 0, 0, false, onToken);
+        chatStream(messages, sampler, 0, onToken);
+    }
+
+    public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken) throws Exception {
+        StreamResult result = doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, onToken);
         try {
             result.future.get(requestTimeoutSeconds, TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
