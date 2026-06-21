@@ -2,6 +2,7 @@ package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppModel;
+import org.argeo.jjml.llm.SpeculativeParams;
 import org.argeo.jjml.llm.params.ContextParam;
 import org.argeo.jjml.llm.params.ContextParams;
 import org.argeo.jjml.llm.params.ModelParam;
@@ -34,6 +35,7 @@ public class LlamaEngine {
     private final KvCacheType cacheTypeV;
     private final boolean taskSuspendOnChat;
     private final Consumer<InferenceEvent> inferenceEventListener;
+    private final MtpAutoTuner mtpAutoTuner;
 
     private final LinkedBlockingQueue<InferenceTask> chatQueue;
     private final PriorityBlockingQueue<PrioritizedInferenceTask> taskQueue;
@@ -74,6 +76,7 @@ public class LlamaEngine {
         this.cacheTypeV = cacheTypeV;
         this.taskSuspendOnChat = taskSuspendOnChat;
         this.inferenceEventListener = inferenceEventListener;
+        this.mtpAutoTuner = new MtpAutoTuner(safeSupportsMtp(model), safeMtpLayerCount(model));
         this.chatQueue = new LinkedBlockingQueue<>(chatLaneConfig.getMaxQueueSize());
         this.taskQueue = new PriorityBlockingQueue<>();
         this.inferenceExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -111,6 +114,7 @@ public class LlamaEngine {
                                              KvCacheType cacheTypeV,
                                              boolean taskSuspendOnChat,
                                              Consumer<InferenceEvent> inferenceEventListener) throws Exception {
+        device = DeviceSelector.normalize(device);
         LlamaCppModel model = loadModel("chat", modelPath, gpuLayers, device);
         String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
         System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
@@ -135,6 +139,22 @@ public class LlamaEngine {
         }, null).get();
         System.out.println("\n[LlamaEngine:" + engineName + "] Model loaded: " + model.getDescription());
         return model;
+    }
+
+    private static boolean safeSupportsMtp(LlamaCppModel model) {
+        try {
+            return model.supportsMtp();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static int safeMtpLayerCount(LlamaCppModel model) {
+        try {
+            return model.getMtpLayerCount();
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     private void startWorker() {
@@ -226,6 +246,7 @@ public class LlamaEngine {
             if (chatQueue.remove(task)) {
                 pendingChatTasks.decrementAndGet();
                 task.getSyncFuture().cancel(false);
+                task.getMtpCalibrationFuture().cancel(false);
                 publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued chat request was cancelled.");
                 return;
             }
@@ -235,6 +256,7 @@ public class LlamaEngine {
         boolean removed = taskQueue.removeIf(queued -> queued.wraps(task));
         if (removed) {
             task.getSyncFuture().cancel(false);
+            task.getMtpCalibrationFuture().cancel(false);
             publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled.");
             finishTask(task);
             notifyTaskArrival();
@@ -334,13 +356,35 @@ public class LlamaEngine {
     }
 
     LlamaCppContext createContext(InferenceLane lane) {
+        return createContext(lane, InferenceOptions.defaults());
+    }
+
+    LlamaCppContext createContext(InferenceLane lane, InferenceOptions options) {
         LaneConfig config = lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig;
         ContextParams ctxParams = LlamaCppContext.defaultContextParams()
                 .with(ContextParam.n_ctx, config.getContextSize())
                 .with(ContextParam.n_threads, config.getThreadCount());
         if (cacheTypeK != null) ctxParams = ctxParams.with(ContextParam.type_k, cacheTypeK.getGgmlType());
         if (cacheTypeV != null) ctxParams = ctxParams.with(ContextParam.type_v, cacheTypeV.getGgmlType());
+        int draftMax = resolveMtpDraftMax(options);
+        if (draftMax > 0) {
+            ctxParams = SpeculativeParams.adjustTargetContextParams(ctxParams, draftMax);
+        }
         return new LlamaCppContext(model, ctxParams);
+    }
+
+    int resolveMtpDraftMax(InferenceOptions options) {
+        if (options == null || !options.isMtpEnabled() || !mtpAutoTuner.isSupported()) return 0;
+        Integer requested = options.getMtpDraftMax();
+        return requested != null ? requested : mtpAutoTuner.recommendedDraftMax();
+    }
+
+    boolean supportsMtpInternal() {
+        return mtpAutoTuner.isSupported();
+    }
+
+    void recordMtpTrial(MtpTrialResult trial) {
+        mtpAutoTuner.record(trial);
     }
 
     LlamaCppModel getModel() { return model; }
@@ -362,6 +406,41 @@ public class LlamaEngine {
         return model.supportsEnableThinking();
     }
 
+    public boolean supportsMtp() {
+        return mtpAutoTuner.isSupported();
+    }
+
+    public int getMtpLayerCount() {
+        return mtpAutoTuner.getMtpLayerCount();
+    }
+
+    public MtpCapability getMtpCapability() {
+        return mtpAutoTuner.capability();
+    }
+
+    public void resetMtpCalibration() {
+        mtpAutoTuner.reset();
+    }
+
+    public java.util.concurrent.CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request) {
+        InferenceTask task = InferenceTask.mtpCalibration(request);
+        submitTask(task);
+        java.util.concurrent.CompletableFuture<MtpCalibrationResult> exposed = new java.util.concurrent.CompletableFuture<>();
+        task.getMtpCalibrationFuture().whenComplete((result, error) -> {
+            if (error != null) {
+                exposed.completeExceptionally(error);
+            } else {
+                exposed.complete(result);
+            }
+        });
+        exposed.whenComplete((result, error) -> {
+            if (exposed.isCancelled() && !task.getMtpCalibrationFuture().isDone()) {
+                cancelTask(task);
+            }
+        });
+        return exposed;
+    }
+
     public void shutdown() {
         if (!running) return;
         running = false;
@@ -369,6 +448,7 @@ public class LlamaEngine {
         if (active != null) {
             active.cancel();
             active.getSyncFuture().cancel(false);
+            active.getMtpCalibrationFuture().cancel(false);
             publishInferenceEvent(active, InferenceEventType.CANCELLED, "Active inference was cancelled during shutdown.");
             finishTask(active);
         }
@@ -401,6 +481,7 @@ public class LlamaEngine {
             pendingChatTasks.decrementAndGet();
             chatTask.cancel();
             chatTask.getSyncFuture().cancel(false);
+            chatTask.getMtpCalibrationFuture().cancel(false);
             publishInferenceEvent(chatTask, InferenceEventType.CANCELLED, "Queued chat request was cancelled during shutdown.");
         }
 
@@ -409,6 +490,7 @@ public class LlamaEngine {
             InferenceTask task = taskTask.getTask();
             task.cancel();
             task.getSyncFuture().cancel(false);
+            task.getMtpCalibrationFuture().cancel(false);
             publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled during shutdown.");
             finishTask(task);
         }

@@ -39,6 +39,14 @@ public class ModelRegistry {
         return chatEngine.supportsEnableThinking();
     }
 
+    public boolean supportsMtp() {
+        return chatEngine.supportsMtp();
+    }
+
+    public MtpCapability getMtpCapability() {
+        return chatEngine.getMtpCapability();
+    }
+
     public void shutdown() {
         if (!shutdown.compareAndSet(false, true)) return;
         if (embeddingEngine != null) {

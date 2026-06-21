@@ -54,6 +54,7 @@ public class EmbeddingEngine {
         if (!Files.exists(mp)) {
             throw new IllegalArgumentException("Embedding model file not found: " + modelPath);
         }
+        device = DeviceSelector.normalize(device);
         System.out.println("[EmbeddingEngine] Loading model: " + modelPath);
         System.out.println("[EmbeddingEngine] GPU layers: " + gpuLayers);
         if (device != null) System.out.println("[EmbeddingEngine] Device: " + device);

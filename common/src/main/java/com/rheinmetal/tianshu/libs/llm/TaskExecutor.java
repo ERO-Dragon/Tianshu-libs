@@ -4,7 +4,7 @@ import org.argeo.jjml.llm.*;
 import org.argeo.jjml.llm.params.DefaultSamplerChainParams;
 import org.argeo.jjml.llm.util.ThinkingMode;
 
-import java.io.IOException;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -13,6 +13,36 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 public class TaskExecutor implements Runnable {
+    private static final int STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS = 64;
+    private static final int MTP_CALIBRATION_CONTEXT_RESERVE = 64;
+    private static final String MTP_CALIBRATION_SYSTEM_PROMPT =
+            "You are a deterministic benchmark assistant. Use the provided long context only as reference data. "
+                    + "Answer the final instruction directly and do not invent external facts.";
+    private static final String MTP_CALIBRATION_USER_PREFIX =
+            "The following is a long Minecraft operations log used to benchmark long-context local inference. "
+                    + "Read it as context, keep track of constraints, and answer the final instruction after the log.\n\n";
+    private static final String MTP_CALIBRATION_BLOCK = """
+            Region note: The overworld base contains a storage hall, a villager trading floor, a redstone clock tower,
+            a crop terrace, a copper roof under oxidation control, and a minecart line that passes through three chunk
+            borders. The player wants safe automation without blocking villagers, breaking item filters, or creating
+            lag spikes during combat. A skeleton farm sends bones into the sorter, a kelp farm sends fuel into the
+            smelter, and a bamboo module is reserved for future scaffolding production.
+            Task constraint: Keep entrances lit, preserve two-wide paths for villagers, never place lava near wooden
+            stairs, keep water streams covered where mobs can pathfind, label overflow chests, and prefer reversible
+            changes. If a route crosses a ravine, use slabs on the lower half and place torches every seventh block.
+            Inventory note: Useful materials include stone bricks, spruce trapdoors, smooth basalt, powered rails,
+            repeaters, comparators, hoppers, barrels, glass panes, moss carpets, candles, ladders, buckets, and spare
+            shulker boxes. Avoid spending diamonds unless the plan directly improves survival or navigation.
+            World note: Nearby structures include a taiga village to the north, a ruined portal beside a river bend,
+            a dripstone cave under the sheep pen, and a stronghold route marked by blue wool. The Nether hub is compact
+            and uses ice boat lanes, so any recommendation should avoid sending casual players through unmarked portals.
+            Safety note: Before cave work, players should bring food, shields, torches, blocks, water, spare tools,
+            and a clear exit marker. They should avoid digging straight down, avoid fighting near lava ledges, and
+            retreat when inventory or durability becomes risky.
+            """;
+    private static final String MTP_CALIBRATION_FINAL_INSTRUCTION =
+            "\nFinal instruction: In exactly four concise bullet points, recommend how the player should prepare a "
+                    + "safe cave expedition while respecting the storage, villager, automation, and route constraints above.";
 
     private final LlamaEngine engine;
     private final Map<InferenceTask, SuspendedTask> coldTasks = new IdentityHashMap<>();
@@ -32,6 +62,7 @@ public class TaskExecutor implements Runnable {
                 if (!engine.isRunning()) {
                     task.cancel();
                     task.getSyncFuture().cancel(false);
+                    task.getMtpCalibrationFuture().cancel(false);
                     closeSuspendedTask(task);
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled because engine stopped.");
                     engine.finishTask(task);
@@ -39,6 +70,7 @@ public class TaskExecutor implements Runnable {
                 }
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
+                    task.getMtpCalibrationFuture().cancel(false);
                     closeSuspendedTask(task);
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled before execution.");
                     engine.finishTask(task);
@@ -117,6 +149,7 @@ public class TaskExecutor implements Runnable {
             cancelled.add(entry.getKey());
             entry.getValue().close();
             entry.getKey().getSyncFuture().cancel(false);
+            entry.getKey().getMtpCalibrationFuture().cancel(false);
             engine.publishInferenceEvent(entry.getKey(), InferenceEventType.CANCELLED, "Task was cancelled while suspended.");
             engine.finishTask(entry.getKey());
         }
@@ -138,6 +171,7 @@ public class TaskExecutor implements Runnable {
         try {
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
+                task.getMtpCalibrationFuture().cancel(false);
                 engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
@@ -145,18 +179,21 @@ public class TaskExecutor implements Runnable {
             engine.setCurrentLane(task.getLane());
 
             ExecutionResult result;
-            if (task.getLane() == InferenceLane.TASK) {
-                result = doTaskInference(task);
-            } else {
-                LlamaCppContext context = engine.createContext(task.getLane());
-                LlamaCppSamplerChain chain = buildSamplerChain(task.getSamplerConfig());
-                result = doChatInference(context, chain, task);
+            try (VulkanInferencePriorityScope ignored = VulkanInferencePriorityScope.apply(task.getInferenceOptions().getVulkanPriority())) {
+                if (task.getTaskType() == InferenceTask.TaskType.MTP_CALIBRATION) {
+                    result = doMtpCalibration(task);
+                } else if (task.getLane() == InferenceLane.TASK) {
+                    result = doTaskInference(task);
+                } else {
+                    result = doChatInference(task);
+                }
             }
             return result;
         } catch (Exception e) {
             System.err.println("[TaskExecutor] Task " + task.getTaskId() + " failed: " + e.getMessage());
             e.printStackTrace();
             task.getSyncFuture().completeExceptionally(e);
+            task.getMtpCalibrationFuture().completeExceptionally(e);
             engine.publishInferenceEvent(task, InferenceEventType.FAILED, "Inference failed: " + e.getMessage(), e);
             if (findSuspendedTask(task) != null) {
                 closeSuspendedTask(task);
@@ -198,12 +235,12 @@ public class TaskExecutor implements Runnable {
         return chain;
     }
 
-    private ExecutionResult doChatInference(LlamaCppContext context, LlamaCppSamplerChain chain, InferenceTask task) throws IOException {
+    private ExecutionResult doChatInference(InferenceTask task) {
+        InferenceTokenGenerator generator = null;
         try {
-            FormattedPromptProcessor processor = new FormattedPromptProcessor(context, chain);
             engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Chat inference started.");
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_STARTED, "Chat prefill started.");
-            writeMessages(processor, task);
+            generator = createTokenGenerator(task, promptSnapshot(task));
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_COMPLETED, "Chat prefill completed.");
             engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Chat generation started.");
 
@@ -213,10 +250,11 @@ public class TaskExecutor implements Runnable {
             int generatedTokens = 0;
             while (task.getMaxTokens() <= 0 || generatedTokens < task.getMaxTokens()) {
                 if (task.isCancelled()) break;
-                String token = processor.nextToken();
-                if (token == null) break;
+                int remaining = task.getMaxTokens() <= 0 ? Integer.MAX_VALUE : task.getMaxTokens() - generatedTokens;
+                GeneratedToken generated = generator.next(remaining);
+                if (generated == null) break;
                 generatedTokens++;
-                String normalizedToken = reasoningNormalizer.accept(token);
+                String normalizedToken = reasoningNormalizer.accept(generated.text());
                 fullResponse.append(normalizedToken);
                 if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
             }
@@ -230,16 +268,17 @@ public class TaskExecutor implements Runnable {
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
+            recordMtpStats(generator);
             task.getSyncFuture().complete(fullResponse.toString());
             engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Chat inference completed.", 0, generatedTokens, null);
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
         } finally {
-            try { context.close(); } catch (Exception ignored) {}
+            if (generator != null) generator.close();
         }
     }
 
-    private ExecutionResult doTaskInference(InferenceTask task) throws IOException {
+    private ExecutionResult doTaskInference(InferenceTask task) {
         SuspendedTask state = removeSuspendedTask(task);
         boolean resumed = state != null;
         if (state == null) state = new SuspendedTask(task);
@@ -257,12 +296,9 @@ public class TaskExecutor implements Runnable {
             engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Task inference started.");
         }
         try {
-            if (state.processor == null) {
-                state.context = engine.createContext(task.getLane());
-                state.chain = buildSamplerChain(task.getSamplerConfig());
-                state.processor = new FormattedPromptProcessor(state.context, state.chain);
-                if (state.formattedPrompt == null) {
-                    state.formattedPrompt = formatMessages(task);
+            if (state.generator == null) {
+                if (state.prompt == null) {
+                    state.prompt = promptSnapshot(task);
                 }
                 engine.publishInferenceEvent(
                         task,
@@ -272,7 +308,8 @@ public class TaskExecutor implements Runnable {
                         state.generatedTokens,
                         null
                 );
-                state.processor.writePreFormatted(state.formattedPrompt + state.rawGeneratedText);
+                state.generator = createResumableTokenGenerator(task, state);
+                state.captureCheckpointIfDue(STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS);
                 engine.publishInferenceEvent(
                         task,
                         InferenceEventType.PREFILL_COMPLETED,
@@ -294,35 +331,40 @@ public class TaskExecutor implements Runnable {
             }
             engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Task generation started.", state.replayCharacters(), state.generatedTokens, null);
 
-            FormattedPromptProcessor processor = state.processor;
+            InferenceTokenGenerator generator = state.generator;
             Consumer<String> callback = task.getStreamCallback();
             ReasoningTagNormalizer reasoningNormalizer = state.reasoningNormalizer;
             while (task.getMaxTokens() <= 0 || state.generatedTokens < task.getMaxTokens()) {
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
+                    task.getMtpCalibrationFuture().cancel(false);
                     clearSuspendedTask(task);
                     state.close();
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Task inference was cancelled.", state.replayCharacters(), state.generatedTokens, null);
                     engine.finishTask(task);
                     return ExecutionResult.COMPLETED;
                 }
-                String token = processor.nextToken();
+                int remaining = task.getMaxTokens() <= 0 ? Integer.MAX_VALUE : task.getMaxTokens() - state.generatedTokens;
+                GeneratedToken token = generator.next(remaining);
                 if (token == null) break;
                 state.generatedTokens++;
-                state.rawGeneratedText.append(token);
-                String normalizedToken = reasoningNormalizer.accept(token);
+                state.generatedTokenIds.add(token.id());
+                state.rawGeneratedText.append(token.text());
+                String normalizedToken = reasoningNormalizer.accept(token.text());
                 state.generatedText.append(normalizedToken);
                 if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
                 if (engine.shouldSuspendTaskLane(task)) {
                     parkSuspendedTask(state);
                     return ExecutionResult.SUSPENDED;
                 }
+                state.captureCheckpointIfDue(STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS);
             }
             String normalizedRemainder = reasoningNormalizer.finish();
             state.generatedText.append(normalizedRemainder);
             if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
 
             task.getSyncFuture().complete(state.generatedText.toString());
+            recordMtpStats(state.generator);
             clearSuspendedTask(task);
             state.close();
             engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Task inference completed.", state.replayCharacters(), state.generatedTokens, null);
@@ -334,8 +376,365 @@ public class TaskExecutor implements Runnable {
         }
     }
 
-    private void writeMessages(FormattedPromptProcessor processor, InferenceTask task) {
-        processor.writePreFormatted(formatMessages(task));
+    private InferenceTokenGenerator createTokenGenerator(InferenceTask task, PromptSnapshot prompt) {
+        int draftMax = engine.resolveMtpDraftMax(task.getInferenceOptions());
+        if (draftMax > 0) {
+            try {
+                return createMtpTokenGenerator(task, prompt.tokenIds(), draftMax);
+            } catch (RuntimeException e) {
+                System.err.println("[TaskExecutor] MTP unavailable for task " + task.getTaskId()
+                        + ", falling back to standard decoding: " + e.getMessage());
+            }
+        }
+        return createStandardTokenGenerator(task, prompt.tokenIds());
+    }
+
+    private InferenceTokenGenerator createResumableTokenGenerator(InferenceTask task, SuspendedTask state) {
+        int draftMax = engine.resolveMtpDraftMax(task.getInferenceOptions());
+        int[] fullTokenIds = TokenIds.concat(state.prompt.tokenIds(), state.generatedTokenIds);
+        int promptTokenCount = state.prompt.tokenIds().length;
+        int generatedTokenCount = state.generatedTokenIds.size();
+        GenerationCheckpoint checkpoint = state.checkpoint;
+        if (draftMax > 0) {
+            if (checkpoint != null && checkpoint.isMtpTarget() && checkpoint.generatedTokenCount() <= generatedTokenCount) {
+                try {
+                    return createMtpTokenGeneratorFromCheckpoint(
+                            task,
+                            fullTokenIds,
+                            promptTokenCount,
+                            generatedTokenCount,
+                            checkpoint,
+                            draftMax
+                    );
+                } catch (RuntimeException e) {
+                    System.err.println("[TaskExecutor] MTP restored-target resume unavailable for task "
+                            + task.getTaskId() + ", falling back to full MTP replay: " + e.getMessage());
+                }
+            }
+            try {
+                return createMtpTokenGenerator(task, fullTokenIds, promptTokenCount, generatedTokenCount, draftMax);
+            } catch (RuntimeException e) {
+                System.err.println("[TaskExecutor] MTP unavailable during resume for task " + task.getTaskId()
+                        + ", falling back to standard decoding: " + e.getMessage());
+            }
+        }
+
+        if (canResumeFromContextCheckpoint(task.getSamplerConfig())
+                && checkpoint != null
+                && checkpoint.isStandard()
+                && checkpoint.generatedTokenCount() < state.generatedTokenIds.size()) {
+            return createStandardTokenGeneratorFromCheckpoint(
+                    task,
+                    checkpoint,
+                    TokenIds.tail(state.generatedTokenIds, checkpoint.generatedTokenCount())
+            );
+        }
+        return createStandardTokenGenerator(task, fullTokenIds, promptTokenCount, generatedTokenCount);
+    }
+
+    private InferenceTokenGenerator createStandardTokenGenerator(InferenceTask task, int[] promptTokens) {
+        return createStandardTokenGenerator(task, promptTokens, promptTokens.length, 0);
+    }
+
+    private InferenceTokenGenerator createStandardTokenGenerator(InferenceTask task,
+                                                                int[] tokenIds,
+                                                                int promptTokenCount,
+                                                                int generatedTokenCount) {
+        LlamaCppContext context = null;
+        LlamaCppSamplerChain chain = null;
+        try {
+            context = engine.createContext(task.getLane());
+            chain = buildSamplerChain(task.getSamplerConfig());
+            return new StandardTokenGenerator(context, chain, tokenIds, promptTokenCount, generatedTokenCount);
+        } catch (RuntimeException e) {
+            if (context != null) try { context.close(); } catch (Exception ignored) {}
+            if (chain != null) try { chain.close(); } catch (Exception ignored) {}
+            throw e;
+        }
+    }
+
+    private InferenceTokenGenerator createStandardTokenGeneratorFromCheckpoint(InferenceTask task,
+                                                                              GenerationCheckpoint checkpoint,
+                                                                              int[] replayTokens) {
+        LlamaCppContext context = null;
+        LlamaCppSamplerChain chain = null;
+        try {
+            context = engine.createContext(task.getLane());
+            chain = buildSamplerChain(task.getSamplerConfig());
+            return new StandardTokenGenerator(context, chain, checkpoint, replayTokens);
+        } catch (RuntimeException e) {
+            if (context != null) try { context.close(); } catch (Exception ignored) {}
+            if (chain != null) try { chain.close(); } catch (Exception ignored) {}
+            throw e;
+        }
+    }
+
+    private InferenceTokenGenerator createMtpTokenGenerator(InferenceTask task, int[] promptTokens, int draftMax) {
+        return createMtpTokenGenerator(task, promptTokens, promptTokens.length, 0, draftMax);
+    }
+
+    private InferenceTokenGenerator createMtpTokenGenerator(InferenceTask task,
+                                                           int[] tokenIds,
+                                                           int promptTokenCount,
+                                                           int generatedTokenCount,
+                                                           int draftMax) {
+        return createMtpTokenGenerator(task, tokenIds, promptTokenCount, generatedTokenCount, null, draftMax);
+    }
+
+    private InferenceTokenGenerator createMtpTokenGeneratorFromCheckpoint(InferenceTask task,
+                                                                         int[] tokenIds,
+                                                                         int promptTokenCount,
+                                                                         int generatedTokenCount,
+                                                                         GenerationCheckpoint checkpoint,
+                                                                         int draftMax) {
+        if (checkpoint.restoredTokenCount() >= tokenIds.length) {
+            throw new IllegalArgumentException("MTP restored-target resume requires at least one tail token");
+        }
+        return createMtpTokenGenerator(task, tokenIds, promptTokenCount, generatedTokenCount, checkpoint, draftMax);
+    }
+
+    private InferenceTokenGenerator createMtpTokenGenerator(InferenceTask task,
+                                                           int[] tokenIds,
+                                                           int promptTokenCount,
+                                                           int generatedTokenCount,
+                                                           GenerationCheckpoint checkpoint,
+                                                           int draftMax) {
+        InferenceOptions options = InferenceOptions.builder()
+                .mtpEnabled(true)
+                .mtpDraftMax(draftMax)
+                .build();
+        LlamaCppContext context = null;
+        LlamaCppSamplerChain chain = null;
+        try {
+            context = engine.createContext(task.getLane(), options);
+            chain = buildSamplerChain(task.getSamplerConfig());
+            return new MtpTokenGenerator(context, chain, tokenIds, promptTokenCount, generatedTokenCount, checkpoint, draftMax);
+        } catch (RuntimeException e) {
+            if (context != null) try { context.close(); } catch (Exception ignored) {}
+            if (chain != null) try { chain.close(); } catch (Exception ignored) {}
+            throw e;
+        }
+    }
+
+    private void recordMtpStats(InferenceTokenGenerator generator) {
+        if (generator == null || !generator.isMtp()) return;
+        try {
+            SpeculativeStats stats = generator.getSpeculativeStats();
+            if (stats != null && stats.generatedTokens() > 0) {
+                engine.recordMtpTrial(MtpTrialResult.success(generator.getMtpDraftMax(), stats));
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private ExecutionResult doMtpCalibration(InferenceTask task) {
+        MtpCalibrationRequest request = task.getMtpCalibrationRequest();
+        if (request == null) request = MtpCalibrationRequest.defaults();
+        engine.publishInferenceEvent(task, InferenceEventType.STARTED, "MTP calibration started.");
+
+        if (!engine.supportsMtpInternal()) {
+            MtpCalibrationResult result = MtpCalibrationResult.unsupported(engine.getMtpLayerCount());
+            completeMtpCalibration(task, result);
+            engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, result.getMessage());
+            engine.finishTask(task);
+            return ExecutionResult.COMPLETED;
+        }
+
+        List<MtpTrialResult> trials = new ArrayList<>();
+        int draftSearchHardLimit = resolveMtpCalibrationDraftSearchHardLimit(request);
+        String formattedPrompt;
+        try {
+            formattedPrompt = buildMtpCalibrationPrompt(task, request, draftSearchHardLimit);
+        } catch (RuntimeException e) {
+            MtpCalibrationResult result = MtpCalibrationResult.failed(
+                    engine.getMtpLayerCount(),
+                    0,
+                    List.of(MtpTrialResult.failed(0, e.getMessage())),
+                    "MTP calibration workload is not runnable: " + e.getMessage()
+            );
+            completeMtpCalibration(task, result);
+            engine.publishInferenceEvent(task, InferenceEventType.FAILED, result.getMessage(), e);
+            engine.finishTask(task);
+            return ExecutionResult.COMPLETED;
+        }
+        int maxDraftMaxTested = 0;
+        int nextDraftMax = 1;
+        int currentDraftLimit = initialMtpCalibrationDraftLimit(request, draftSearchHardLimit);
+        boolean stopCalibration = false;
+        while (!stopCalibration && nextDraftMax <= currentDraftLimit) {
+            boolean stoppedOnFailure = false;
+            for (int draftMax = nextDraftMax; draftMax <= currentDraftLimit; draftMax++) {
+                if (task.isCancelled()) {
+                    cancelMtpCalibration(task);
+                    return ExecutionResult.COMPLETED;
+                }
+                maxDraftMaxTested = draftMax;
+                try (InferenceTokenGenerator generator = createMtpTokenGenerator(
+                        task,
+                        tokenizePrompt(formattedPrompt),
+                        draftMax)) {
+                    int generated = 0;
+                    while (generated < request.getMaxTokens()) {
+                        if (task.isCancelled()) {
+                            cancelMtpCalibration(task);
+                            return ExecutionResult.COMPLETED;
+                        }
+                        GeneratedToken token = generator.next(request.getMaxTokens() - generated);
+                        if (token == null) break;
+                        generated++;
+                    }
+                    MtpTrialResult trial = MtpTrialResult.success(draftMax, generator.getSpeculativeStats());
+                    trials.add(trial);
+                    engine.recordMtpTrial(trial);
+                } catch (RuntimeException e) {
+                    trials.add(MtpTrialResult.failed(draftMax, e.getMessage()));
+                    stoppedOnFailure = request.isAutoDraftMax();
+                    if (stoppedOnFailure) break;
+                }
+            }
+            if (!request.isAutoDraftMax() || stoppedOnFailure) break;
+            if (!shouldExpandMtpCalibrationDraftLimit(trials, currentDraftLimit, draftSearchHardLimit)) break;
+            nextDraftMax = currentDraftLimit + 1;
+            currentDraftLimit = Math.min(currentDraftLimit * 2, draftSearchHardLimit);
+            stopCalibration = nextDraftMax > currentDraftLimit;
+        }
+
+        MtpCalibrationResult result = MtpCalibrationResult.completed(
+                engine.getMtpLayerCount(),
+                maxDraftMaxTested,
+                trials
+        );
+        completeMtpCalibration(task, result);
+        engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, result.getMessage());
+        engine.finishTask(task);
+        return ExecutionResult.COMPLETED;
+    }
+
+    private int resolveMtpCalibrationDraftSearchHardLimit(MtpCalibrationRequest request) {
+        return request.isAutoDraftMax()
+                ? MtpCalibrationRequest.DEFAULT_AUTO_DRAFT_MAX_LIMIT
+                : request.getMaxDraftMax();
+    }
+
+    private int initialMtpCalibrationDraftLimit(MtpCalibrationRequest request, int draftSearchHardLimit) {
+        return request.isAutoDraftMax()
+                ? Math.min(MtpCalibrationRequest.DEFAULT_AUTO_DRAFT_MAX_INITIAL_LIMIT, draftSearchHardLimit)
+                : draftSearchHardLimit;
+    }
+
+    private boolean shouldExpandMtpCalibrationDraftLimit(List<MtpTrialResult> trials,
+                                                         int currentDraftLimit,
+                                                         int draftSearchHardLimit) {
+        if (currentDraftLimit >= draftSearchHardLimit) return false;
+        MtpTrialResult best = bestMtpTrial(trials);
+        if (best == null) return false;
+        int expansionThreshold = Math.max(1, (int) Math.ceil(currentDraftLimit * 0.75));
+        return best.getDraftMax() >= expansionThreshold;
+    }
+
+    private boolean canResumeFromContextCheckpoint(SamplerConfig config) {
+        // JJML context state does not persist sampler/grammar history yet.
+        // Use KV checkpoints only when replaying sampler state is not required.
+        if (config == null) return true;
+        if (config.hasGrammar()) return false;
+        if (config.temperature() != 0.0f) return false;
+        if (config.penaltyRepeat() != 1.0f) return false;
+        if (config.penaltyFreq() != 0.0f) return false;
+        if (config.penaltyPresent() != 0.0f) return false;
+        return true;
+    }
+
+    private MtpTrialResult bestMtpTrial(List<MtpTrialResult> trials) {
+        MtpTrialResult best = null;
+        for (MtpTrialResult trial : trials) {
+            if (trial == null || !trial.isSuccess()) continue;
+            if (best == null || trial.getTokensPerSecond() > best.getTokensPerSecond()) {
+                best = trial;
+            }
+        }
+        return best;
+    }
+
+    private String buildMtpCalibrationPrompt(InferenceTask task,
+                                             MtpCalibrationRequest request,
+                                             int draftSearchLimit) {
+        int contextSize = engine.getTaskLaneConfig().getContextSize();
+        int draftOutputReserve = SpeculativeParams.requiredMtpTargetOutputs(draftSearchLimit);
+        int maxRunnablePromptTokens = contextSize
+                - request.getMaxTokens()
+                - draftOutputReserve
+                - MTP_CALIBRATION_CONTEXT_RESERVE;
+        if (maxRunnablePromptTokens < MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS) {
+            throw new IllegalArgumentException("task context size " + contextSize
+                    + " is too small for heavy MTP calibration"
+                    + " (minimumPromptTokens=" + MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS
+                    + ", maxTokens=" + request.getMaxTokens()
+                    + ", draftOutputReserve=" + draftOutputReserve + ")");
+        }
+        int targetPromptTokens = Math.min(request.getTargetPromptTokens(), maxRunnablePromptTokens);
+
+        StringBuilder context = new StringBuilder(MTP_CALIBRATION_USER_PREFIX);
+        String formattedPrompt = formatCalibrationMessages(task, context + MTP_CALIBRATION_FINAL_INSTRUCTION);
+        int promptTokens = countPromptTokens(formattedPrompt);
+        if (promptTokens > maxRunnablePromptTokens) {
+            throw new IllegalStateException("calibration prompt template exceeds runnable prompt budget"
+                    + " (promptTokens=" + promptTokens
+                    + ", maxRunnablePromptTokens=" + maxRunnablePromptTokens + ")");
+        }
+        int blockIndex = 1;
+        while (promptTokens < targetPromptTokens) {
+            int previousLength = context.length();
+            context.append("Log block ").append(blockIndex++).append(":\n")
+                    .append(MTP_CALIBRATION_BLOCK)
+                    .append('\n');
+            String candidatePrompt = formatCalibrationMessages(task, context + MTP_CALIBRATION_FINAL_INSTRUCTION);
+            int candidatePromptTokens = countPromptTokens(candidatePrompt);
+            if (candidatePromptTokens > maxRunnablePromptTokens) {
+                context.setLength(previousLength);
+                break;
+            }
+            formattedPrompt = candidatePrompt;
+            promptTokens = candidatePromptTokens;
+            if (blockIndex > 512) {
+                throw new IllegalStateException("failed to build heavy MTP calibration prompt");
+            }
+        }
+        if (promptTokens < MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS) {
+            throw new IllegalStateException("failed to build heavy MTP calibration prompt within runnable budget"
+                    + " (promptTokens=" + promptTokens
+                    + ", minimumPromptTokens=" + MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS
+                    + ", maxRunnablePromptTokens=" + maxRunnablePromptTokens + ")");
+        }
+        return formattedPrompt;
+    }
+
+    private String formatCalibrationMessages(InferenceTask task, String userContent) {
+        List<LlamaCppChatMessage> messages = List.of(
+                new LlamaCppChatMessage("system", MTP_CALIBRATION_SYSTEM_PROMPT),
+                new LlamaCppChatMessage("user", userContent)
+        );
+        SamplerConfig config = task.getSamplerConfig();
+        ChatTemplateOptions options = chatTemplateOptions(config);
+        return options.kwargs().isEmpty()
+                ? engine.getModel().formatChatMessages(messages, options.thinkingMode())
+                : engine.getModel().formatChatMessagesJinja(messages, true, options.thinkingMode(), options.kwargs());
+    }
+
+    private int countPromptTokens(String formattedPrompt) {
+        IntBuffer tokens = engine.getModel().getVocabulary().tokenize(formattedPrompt);
+        return tokens.remaining();
+    }
+
+    private void completeMtpCalibration(InferenceTask task, MtpCalibrationResult result) {
+        task.getMtpCalibrationFuture().complete(result);
+        task.getSyncFuture().complete(result.getMessage());
+    }
+
+    private void cancelMtpCalibration(InferenceTask task) {
+        task.getMtpCalibrationFuture().cancel(false);
+        task.getSyncFuture().cancel(false);
+        engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "MTP calibration was cancelled.");
+        engine.finishTask(task);
     }
 
     private String formatMessages(InferenceTask task) {
@@ -345,6 +744,15 @@ public class TaskExecutor implements Runnable {
         return options.kwargs().isEmpty()
                 ? engine.getModel().formatChatMessages(task.getMessages(), options.thinkingMode())
                 : engine.getModel().formatChatMessagesJinja(task.getMessages(), true, options.thinkingMode(), options.kwargs());
+    }
+
+    private PromptSnapshot promptSnapshot(InferenceTask task) {
+        String formattedPrompt = formatMessages(task);
+        return new PromptSnapshot(formattedPrompt, tokenizePrompt(formattedPrompt));
+    }
+
+    private int[] tokenizePrompt(String formattedPrompt) {
+        return TokenIds.copyRemaining(engine.getModel().getVocabulary().tokenize(formattedPrompt));
     }
 
     private ChatTemplateOptions chatTemplateOptions(SamplerConfig config) {
@@ -404,6 +812,7 @@ public class TaskExecutor implements Runnable {
         for (SuspendedTask suspended : coldTasks.values()) {
             suspended.task.cancel();
             suspended.task.getSyncFuture().cancel(false);
+            suspended.task.getMtpCalibrationFuture().cancel(false);
             suspended.close();
             engine.publishInferenceEvent(suspended.task, InferenceEventType.CANCELLED, "Task was cancelled during shutdown.");
             engine.finishTask(suspended.task);
@@ -425,32 +834,60 @@ public class TaskExecutor implements Runnable {
         private final InferenceTask task;
         private final StringBuilder generatedText = new StringBuilder();
         private final StringBuilder rawGeneratedText = new StringBuilder();
+        private final List<Integer> generatedTokenIds = new ArrayList<>();
         private final ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
-        private String formattedPrompt;
-        private LlamaCppContext context;
-        private LlamaCppSamplerChain chain;
-        private FormattedPromptProcessor processor;
+        private PromptSnapshot prompt;
+        private InferenceTokenGenerator generator;
+        private GenerationCheckpoint checkpoint;
         private int generatedTokens;
+        private int checkpointedTokens;
 
         private SuspendedTask(InferenceTask task) {
             this.task = task;
         }
 
         private void close() {
-            processor = null;
-            chain = null;
-            if (context != null) {
-                try { context.close(); } catch (Exception ignored) {}
-                context = null;
+            if (generator != null) {
+                try { generator.close(); } catch (Exception ignored) {}
+                generator = null;
             }
         }
 
         private void coolDown() {
+            captureCheckpointBeforeSuspend();
             close();
         }
 
+        private void captureCheckpointIfDue(int intervalTokens) {
+            if (!(generator instanceof CheckpointableTokenGenerator checkpointable)) return;
+            if (generatedTokens == 0) return;
+            if (generatedTokens - checkpointedTokens < intervalTokens) return;
+            GenerationCheckpoint nextCheckpoint = checkpointable.checkpoint();
+            if (nextCheckpoint == null) return;
+            checkpoint = nextCheckpoint;
+            checkpointedTokens = nextCheckpoint.generatedTokenCount();
+        }
+
+        private void captureCheckpointBeforeSuspend() {
+            if (!(generator instanceof CheckpointableTokenGenerator checkpointable)) return;
+            if (generatedTokens == 0) return;
+            GenerationCheckpoint nextCheckpoint = checkpointable.checkpoint();
+            if (nextCheckpoint == null) return;
+            if (!isCheckpointUsableNow(nextCheckpoint)) return;
+            checkpoint = nextCheckpoint;
+            checkpointedTokens = nextCheckpoint.generatedTokenCount();
+        }
+
+        private boolean isCheckpointUsableNow(GenerationCheckpoint candidate) {
+            if (candidate.isMtpTarget()) {
+                int promptTokenCount = prompt == null ? 0 : prompt.tokenIds().length;
+                return candidate.restoredTokenCount() < promptTokenCount + generatedTokens;
+            }
+            return candidate.generatedTokenCount() < generatedTokens;
+        }
+
         private int replayCharacters() {
-            int promptLength = formattedPrompt == null ? 0 : formattedPrompt.length();
+            int promptLength = prompt == null ? 0 : prompt.textLength();
             return promptLength + rawGeneratedText.length();
         }
     }

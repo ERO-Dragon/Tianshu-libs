@@ -1,10 +1,14 @@
 package com.rheinmetal.tianshu.libs.llm;
 
 import com.rheinmetal.tianshu.libs.core.JavaLlamaServer;
+import org.argeo.jjml.llm.LlamaCppChatMessage;
+import org.argeo.jjml.llm.SpeculativeParams;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import java.lang.reflect.Field;
+import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -20,10 +24,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @EnabledIfSystemProperty(named = "tianshu.llm.model", matches = ".+")
 class LlamaEngineInterruptIntegrationTest {
     private JavaLlamaServer service;
+    private static final int LONG_MTP_CONTEXT_TOKENS = 8192;
+    private static final int LONG_MTP_TARGET_PROMPT_TOKENS = 7000;
+    private static final int LONG_MTP_MAX_TOKENS = 1024;
+    private static final int LONG_MTP_DRAFT_MAX = 1;
+    private static final int LONG_MTP_CONTEXT_RESERVE = 64;
+    private static final String LONG_MTP_CONTEXT_BLOCK = """
+            Operations note: The player is maintaining a busy overworld base with villager trading,
+            storage sorting, crop farms, a kelp-powered smelter, a bamboo reserve, a minecart route,
+            and a compact Nether hub. The plan must avoid lava near wooden stairs, keep villager paths
+            two blocks wide, protect water streams from mob pathfinding, label overflow storage, reduce
+            lag during combat, preserve reversible redstone changes, and mark cave exits clearly.
+            Expedition note: Before cave work, the player should bring food, shields, torches, blocks,
+            water, spare tools, ladders, and shulker boxes. They should avoid digging straight down,
+            avoid fighting near lava ledges, retreat when durability is low, and place route markers
+            every few turns so casual players can find their way back without using unmarked portals.
+            """;
 
     @AfterEach
     void tearDown() {
@@ -85,6 +106,37 @@ class LlamaEngineInterruptIntegrationTest {
         assertUsableOutput(chat);
 
         String result = task.get(240, TimeUnit.SECONDS);
+        assertUsableOutput(result);
+        assertEquals(result, capture.text());
+        assertNoUnnormalizedReasoningTags(result);
+    }
+
+    @Test
+    void mtpTaskStreamSurvivesSingleChatInterrupt() throws Exception {
+        service = newService(1, 8192);
+        service.start();
+        assumeTrue(service.supportsMtp(), "model does not support MTP");
+
+        StreamCapture capture = new StreamCapture(20);
+        CompletableFuture<String> task = service.taskStream(
+                taskPrompt("Write 220 comma-separated integers, starting from 1. Continue until the list is complete."),
+                deterministicSampler(false),
+                420,
+                0,
+                false,
+                mtpOptions(),
+                capture::accept
+        );
+
+        assertTrue(capture.await(120), "MTP task stream did not start");
+        String chat = service.chat(
+                List.of(ChatMessage.user("Reply with exactly: MTP_INTERRUPT_OK")),
+                deterministicSampler(false),
+                24
+        );
+        assertUsableOutput(chat);
+
+        String result = task.get(360, TimeUnit.SECONDS);
         assertUsableOutput(result);
         assertEquals(result, capture.text());
         assertNoUnnormalizedReasoningTags(result);
@@ -238,6 +290,128 @@ class LlamaEngineInterruptIntegrationTest {
         assertEquals(highResult, highCapture.text());
         assertEquals(lowResult, lowCapture.text());
         assertNoUnnormalizedReasoningTags(lowResult);
+    }
+
+    @Test
+    void mtpPreemptedTaskCanColdResumeAfterHigherPriorityTask() throws Exception {
+        service = newService(1, 8192);
+        service.start();
+        assumeTrue(service.supportsMtp(), "model does not support MTP");
+
+        StreamCapture lowCapture = new StreamCapture(10);
+        CompletableFuture<String> low = service.taskStream(
+                taskPrompt("Write 240 comma-separated integers, starting from 1. Continue until the list is complete."),
+                deterministicSampler(false),
+                520,
+                0,
+                true,
+                mtpOptions(),
+                lowCapture::accept
+        );
+
+        assertTrue(lowCapture.await(120), "low priority MTP task stream did not start");
+
+        StreamCapture highCapture = new StreamCapture(1);
+        CompletableFuture<String> high = service.taskStream(
+                taskPrompt("Reply with exactly: HIGH_PRIORITY_OVER_MTP"),
+                deterministicSampler(false),
+                32,
+                10,
+                false,
+                highCapture::accept
+        );
+
+        assertTrue(highCapture.await(120), "high priority task stream did not start");
+        String chat = service.chat(
+                List.of(ChatMessage.user("Reply with exactly: CHAT_DURING_MTP_PREEMPTION")),
+                deterministicSampler(false),
+                24
+        );
+        assertUsableOutput(chat);
+
+        String highResult = high.get(240, TimeUnit.SECONDS);
+        String lowResult = low.get(420, TimeUnit.SECONDS);
+
+        assertUsableOutput(highResult);
+        assertUsableOutput(lowResult);
+        assertEquals(highResult, highCapture.text());
+        assertEquals(lowResult, lowCapture.text());
+        assertNoUnnormalizedReasoningTags(lowResult);
+    }
+
+    @Test
+    @EnabledIfSystemProperty(named = "tianshu.llm.perf", matches = "true")
+    void mtpColdResumeWithLongPrompt8k() throws Exception {
+        service = newService(1, LONG_MTP_CONTEXT_TOKENS);
+        service.start();
+        assumeTrue(service.supportsMtp(), "model does not support MTP");
+
+        PerfCapture lowCapture = new PerfCapture(1);
+        LlamaEngine engine = loadedEngine(service);
+        LongMtpPrompt prompt = longMtpPrompt(engine);
+        long submittedNanos = System.nanoTime();
+        CompletableFuture<String> low = service.taskStream(
+                prompt.messages(),
+                deterministicSampler(false),
+                LONG_MTP_MAX_TOKENS,
+                0,
+                true,
+                mtpOptions(),
+                lowCapture::accept
+        );
+
+        assertTrue(lowCapture.awaitFutureProgress(low, 300), "long-prompt MTP task did not emit a token before interruption");
+
+        PerfCapture highCapture = new PerfCapture(1);
+        CompletableFuture<String> high = service.taskStream(
+                taskPrompt("Reply with exactly: LONG_MTP_HIGH"),
+                deterministicSampler(false),
+                32,
+                10,
+                false,
+                highCapture::accept
+        );
+
+        assertTrue(highCapture.await(180), "high priority task stream did not start");
+        String chat = service.chat(
+                List.of(ChatMessage.user("Reply with exactly: LONG_MTP_CHAT")),
+                deterministicSampler(false),
+                24
+        );
+        assertUsableOutput(chat);
+
+        int countAtColdResume = lowCapture.tokenCount();
+        String highResult = high.get(240, TimeUnit.SECONDS);
+        long highFinishedNanos = System.nanoTime();
+        assertUsableOutput(highResult);
+
+        assertTrue(lowCapture.awaitTokenCount(countAtColdResume + 1, 360),
+                "long-prompt MTP task did not emit a token after cold resume");
+        long firstPostColdTokenNanos = lowCapture.firstTokenAtOrAfter(countAtColdResume + 1);
+
+        String lowResult = low.get(540, TimeUnit.SECONDS);
+        long finishedNanos = System.nanoTime();
+        assertUsableOutput(lowResult);
+        assertEquals(lowResult, lowCapture.text());
+        assertNoUnnormalizedReasoningTags(lowResult);
+
+        double ttftMs = (lowCapture.firstTokenAtOrAfter(1) - submittedNanos) / 1_000_000.0;
+        double coldResumeToFirstTokenMs = (firstPostColdTokenNanos - highFinishedNanos) / 1_000_000.0;
+        double totalSeconds = Math.max(0.001, (finishedNanos - submittedNanos) / 1_000_000_000.0);
+
+        System.out.println("=== LONG MTP COLD RESUME 8K ===");
+        System.out.println("context_tokens=" + LONG_MTP_CONTEXT_TOKENS);
+        System.out.println("target_prompt_tokens=" + LONG_MTP_TARGET_PROMPT_TOKENS);
+        System.out.println("actual_prompt_tokens=" + prompt.tokenCount());
+        System.out.println("max_tokens=" + LONG_MTP_MAX_TOKENS);
+        System.out.println("draft_max=" + LONG_MTP_DRAFT_MAX);
+        System.out.println("prompt_chars=" + prompt.userContent().length());
+        System.out.println("pre_cold_callback_chunks=" + countAtColdResume);
+        System.out.println("total_callback_chunks=" + lowCapture.tokenCount());
+        System.out.printf("long_mtp_ttft_ms=%.2f%n", ttftMs);
+        System.out.printf("long_mtp_cold_resume_ttft_ms=%.2f%n", coldResumeToFirstTokenMs);
+        System.out.printf("long_mtp_total_seconds=%.2f%n", totalSeconds);
+        System.out.println("=== END LONG MTP COLD RESUME 8K ===");
     }
 
     @Test
@@ -486,6 +660,13 @@ class LlamaEngineInterruptIntegrationTest {
         return sampler;
     }
 
+    private InferenceOptions mtpOptions() {
+        return InferenceOptions.builder()
+                .mtpEnabled(true)
+                .mtpDraftMax(LONG_MTP_DRAFT_MAX)
+                .build();
+    }
+
     private List<ChatMessage> taskPrompt(String userPrompt) {
         return List.of(
                 ChatMessage.system("You are a concise test assistant. Follow the user instruction directly."),
@@ -507,6 +688,57 @@ class LlamaEngineInterruptIntegrationTest {
         }
         prompt.append("Now provide the plan.");
         return prompt.toString();
+    }
+
+    private LongMtpPrompt longMtpPrompt(LlamaEngine engine) {
+        int maxRunnablePromptTokens = LONG_MTP_CONTEXT_TOKENS
+                - LONG_MTP_MAX_TOKENS
+                - SpeculativeParams.requiredMtpTargetOutputs(LONG_MTP_DRAFT_MAX)
+                - LONG_MTP_CONTEXT_RESERVE;
+        assertTrue(maxRunnablePromptTokens >= MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS,
+                "8k context is too small for this long-prompt MTP workload");
+        int targetPromptTokens = Math.min(LONG_MTP_TARGET_PROMPT_TOKENS, maxRunnablePromptTokens);
+
+        StringBuilder context = new StringBuilder();
+        LongMtpPrompt prompt = formatLongMtpPrompt(engine, context.toString());
+        assertTrue(prompt.tokenCount() <= maxRunnablePromptTokens,
+                "base long MTP prompt exceeds runnable prompt budget");
+
+        int block = 1;
+        while (prompt.tokenCount() < targetPromptTokens) {
+            int previousLength = context.length();
+            context.append("Context block ").append(block++).append(":\n")
+                    .append(LONG_MTP_CONTEXT_BLOCK)
+                    .append('\n');
+            LongMtpPrompt candidate = formatLongMtpPrompt(engine, context.toString());
+            if (candidate.tokenCount() > maxRunnablePromptTokens) {
+                context.setLength(previousLength);
+                break;
+            }
+            prompt = candidate;
+            if (block > 512) {
+                throw new IllegalStateException("failed to build long MTP prompt");
+            }
+        }
+        assertTrue(prompt.tokenCount() >= MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS,
+                "long MTP prompt did not reach the heavy prompt threshold");
+        return prompt;
+    }
+
+    private LongMtpPrompt formatLongMtpPrompt(LlamaEngine engine, String context) {
+        String system = "You are a concise test assistant. Follow the user instruction directly.";
+        String user = "Read all context notes, then write a practical Minecraft operations report. "
+                + "Do not use hidden reasoning. Continue with concrete recommendations until the output budget is used.\n"
+                + context
+                + "Final instruction: produce a structured report with sections for safety, storage, villagers, routes, automation, and cave preparation.";
+        List<ChatMessage> publicMessages = List.of(ChatMessage.system(system), ChatMessage.user(user));
+        List<LlamaCppChatMessage> llamaMessages = List.of(
+                new LlamaCppChatMessage("system", system),
+                new LlamaCppChatMessage("user", user)
+        );
+        String formattedPrompt = engine.getModel().formatChatMessages(llamaMessages, deterministicSampler(false).effectiveThinkingMode());
+        IntBuffer tokens = engine.getModel().getVocabulary().tokenize(formattedPrompt);
+        return new LongMtpPrompt(publicMessages, user, tokens.remaining());
     }
 
     private String longRealtimeChatPrompt() {
@@ -651,6 +883,18 @@ class LlamaEngineInterruptIntegrationTest {
             return firstTokensLatch.await(timeoutSeconds, TimeUnit.SECONDS);
         }
 
+        protected boolean awaitFutureProgress(CompletableFuture<?> future, long timeoutSeconds) throws Exception {
+            long deadline = System.nanoTime() + Duration.ofSeconds(timeoutSeconds).toNanos();
+            while (true) {
+                if (firstTokensLatch.await(1, TimeUnit.SECONDS)) return true;
+                if (future.isDone()) {
+                    future.get(1, TimeUnit.SECONDS);
+                    return firstTokensLatch.getCount() == 0;
+                }
+                if (System.nanoTime() >= deadline) return false;
+            }
+        }
+
         protected boolean awaitMore(int additionalChars, long timeoutSeconds) throws InterruptedException {
             long deadline = System.nanoTime() + Duration.ofSeconds(timeoutSeconds).toNanos();
             synchronized (lock) {
@@ -719,5 +963,17 @@ class LlamaEngineInterruptIntegrationTest {
                 return tokenTimes.get(oneBasedTokenCount - 1);
             }
         }
+    }
+
+    private LlamaEngine loadedEngine(JavaLlamaServer server) throws Exception {
+        Field modelsField = JavaLlamaServer.class.getDeclaredField("models");
+        modelsField.setAccessible(true);
+        Object registry = modelsField.get(server);
+        Field chatEngineField = registry.getClass().getDeclaredField("chatEngine");
+        chatEngineField.setAccessible(true);
+        return (LlamaEngine) chatEngineField.get(registry);
+    }
+
+    private record LongMtpPrompt(List<ChatMessage> messages, String userContent, int tokenCount) {
     }
 }

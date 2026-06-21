@@ -1,13 +1,18 @@
 package com.rheinmetal.tianshu.libs.core;
 
 import com.rheinmetal.tianshu.libs.llm.ChatMessage;
+import com.rheinmetal.tianshu.libs.llm.DeviceSelector;
 import com.rheinmetal.tianshu.libs.llm.EmbeddingEngine;
 import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
 import com.rheinmetal.tianshu.libs.llm.InferenceLane;
+import com.rheinmetal.tianshu.libs.llm.InferenceOptions;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
 import com.rheinmetal.tianshu.libs.llm.LaneConfig;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
 import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
+import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
+import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
+import com.rheinmetal.tianshu.libs.llm.MtpCapability;
 import com.rheinmetal.tianshu.libs.llm.SamplerConfig;
 import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
 import com.rheinmetal.tianshu.libs.rag.RagSearchResult;
@@ -134,6 +139,10 @@ public class JavaLlamaServer {
         return requireLibsApi().chat(messages, sampler, maxTokens);
     }
 
+    public String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+        return requireLibsApi().chat(messages, sampler, maxTokens, options);
+    }
+
     public void chatStream(String message, String systemPrompt, Consumer<String> onToken) throws Exception {
         chatStream(toMessages(message, systemPrompt), null, onToken);
     }
@@ -154,12 +163,29 @@ public class JavaLlamaServer {
         requireLibsApi().chatStream(messages, sampler, maxTokens, onToken);
     }
 
+    public void chatStream(List<ChatMessage> messages,
+                           SamplerConfig sampler,
+                           int maxTokens,
+                           InferenceOptions options,
+                           Consumer<String> onToken) throws Exception {
+        requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken);
+    }
+
     public CompletableFuture<String> task(List<ChatMessage> messages,
                                                 SamplerConfig sampler,
                                                 int maxTokens,
                                                 int priority,
                                                 boolean preemptible) {
         return requireLibsApi().task(messages, sampler, maxTokens, priority, preemptible);
+    }
+
+    public CompletableFuture<String> task(List<ChatMessage> messages,
+                                          SamplerConfig sampler,
+                                          int maxTokens,
+                                          int priority,
+                                          boolean preemptible,
+                                          InferenceOptions options) {
+        return requireLibsApi().task(messages, sampler, maxTokens, priority, preemptible, options);
     }
 
     public CompletableFuture<String> taskStream(List<ChatMessage> messages,
@@ -169,6 +195,16 @@ public class JavaLlamaServer {
                                                 boolean preemptible,
                                                 Consumer<String> tokenConsumer) {
         return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, tokenConsumer);
+    }
+
+    public CompletableFuture<String> taskStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                int priority,
+                                                boolean preemptible,
+                                                InferenceOptions options,
+                                                Consumer<String> tokenConsumer) {
+        return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer);
     }
 
     public float[] embed(String text) throws Exception {
@@ -195,6 +231,33 @@ public class JavaLlamaServer {
     public boolean supportsEnableThinking() {
         ModelRegistry current = models;
         return current != null && current.supportsEnableThinking();
+    }
+
+    public boolean supportsMtp() {
+        ModelRegistry current = models;
+        return current != null && current.supportsMtp();
+    }
+
+    public MtpCapability getMtpCapability() {
+        ModelRegistry current = models;
+        if (current == null) return new MtpCapability(false, 0, null);
+        return current.getMtpCapability();
+    }
+
+    public CompletableFuture<MtpCalibrationResult> calibrateMtpAsync() {
+        return calibrateMtpAsync(MtpCalibrationRequest.defaults());
+    }
+
+    public CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request) {
+        return requireLibsApi().calibrateMtpAsync(request);
+    }
+
+    public MtpCalibrationResult calibrateMtp() throws Exception {
+        return calibrateMtp(MtpCalibrationRequest.defaults());
+    }
+
+    public MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exception {
+        return requireLibsApi().calibrateMtp(request);
     }
 
     public boolean hasChatQueueCapacity() {
@@ -381,8 +444,7 @@ public class JavaLlamaServer {
         }
 
         private static String normalizeDevice(String device) {
-            if (device == null || device.isBlank()) return null;
-            return device.trim();
+            return DeviceSelector.normalize(device);
         }
     }
 }

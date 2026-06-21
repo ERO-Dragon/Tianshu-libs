@@ -10,6 +10,8 @@ libs 只提供底层基础能力，不包含业务逻辑。
 | 向量 | embed(text) / embed(texts) |
 | 检索 | search(queryText, texts, topK, threshold) |
 | 调度 | CHAT 优先，可暂停 TASK |
+| 运行选项 | InferenceOptions 控制请求级 MTP 与 Vulkan 时间片优先级 |
+| 能力探测 | supportsMtp / getMtpCapability / calibrateMtp |
 
 ---
 
@@ -61,6 +63,7 @@ String chat(String message, String systemPrompt, ThinkingMode thinkingMode);
 // 同步聊天
 String chat(List<ChatMessage> messages);
 String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens);
+String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options);
 
 // 流式聊天
 void chatStream(String message, String systemPrompt, Consumer<String> onToken);
@@ -68,13 +71,16 @@ void chatStream(String message, String systemPrompt, int maxTokens, Consumer<Str
 void chatStream(List<ChatMessage> messages, Consumer<String> onToken);
 void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken);
 void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken);
+void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken);
 
 // 后台任务（可被 chat 暂停）- 同步返回
 CompletableFuture<String> task(List<ChatMessage> messages);
 CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible);
+CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options);
 
 // 后台任务 - 流式返回
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, Consumer<String> tokenConsumer);
+CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer);
 ```
 
 ### 2.1.1 推理状态事件
@@ -127,6 +133,82 @@ libs 不新增或改变上述调用方法；所有归一化都发生在内部 to
 - 流式输出不会缓冲完整思考段。内部只暂存可能组成标签的短尾部，以及开标签后的空白前缀；一旦出现非空思考内容，会立即流式输出规范化后的 `<think>` 和后续内容。
 - `enableThinking` / `ThinkingMode` 仍然只是生成前的模板控制；输出归一化是生成后的统一兼容层，二者互不改变对外 API。
 
+### 2.1.3 请求级运行选项
+
+`InferenceOptions` 用于描述一次推理请求的执行策略。它不替代 `SamplerConfig`：采样、思考模板、grammar 仍放在 `SamplerConfig`；MTP、Vulkan 时间片等运行时策略放在 `InferenceOptions`。
+
+```java
+InferenceOptions options = InferenceOptions.builder()
+    .mtpEnabled(true)          // 本轮请求尝试使用 MTP；模型不支持时自动走普通推理
+    .mtpDraftMax(null)         // null 表示使用当前模型已校准的推荐值；未校准时使用默认值
+    .vulkanPriority(0.35f)     // 0.0~1.0；值越低越倾向于给游戏渲染让路
+    .build();
+
+String reply = service.chat(messages, sampler, 256, options);
+```
+
+字段语义：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `mtpEnabled` | false | 是否在本轮请求尝试使用 MTP speculative decoding |
+| `mtpDraftMax` | null | 本轮请求指定 draft token 窗口；null 表示使用自动校准出的推荐值 |
+| `vulkanPriority` | null | Vulkan 时间片推理优先级；null 表示不改动底层调度状态 |
+
+说明：
+
+- MTP 是请求级开关，不是模型加载时的永久开关；同一个模型可以某些请求启用 MTP，某些请求走普通推理。
+- 当模型不支持 MTP，或 MTP 初始化失败时，libs 会安全降级到普通推理，不要求上层额外兜底。
+- `vulkanPriority=1.0f` 近似普通 Vulkan 执行；`vulkanPriority=0.0f` 最大程度让位给游戏侧负载。
+- Vulkan 时间片能力依赖当前运行时的 Vulkan backend、驱动和扩展支持；不支持时该设置会被忽略。
+
+### 2.1.4 MTP 能力探测与自动校准
+
+MTP 能力和推荐配置属于“当前已加载模型 + 当前运行环境”的状态。上层推荐在模型加载完成后先查询能力，再按需触发一次校准。
+
+```java
+boolean supported = service.supportsMtp();
+MtpCapability capability = service.getMtpCapability();
+
+if (supported && !capability.isCalibrated()) {
+    MtpCalibrationResult result = service.calibrateMtp(
+        MtpCalibrationRequest.defaults()
+    );
+    int bestDraftMax = result.getBestDraftMax();
+}
+```
+
+对外接口：
+
+```java
+boolean supportsMtp();
+MtpCapability getMtpCapability();
+CompletableFuture<MtpCalibrationResult> calibrateMtpAsync();
+CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request);
+MtpCalibrationResult calibrateMtp() throws Exception;
+MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exception;
+```
+
+主要数据：
+
+| 类型 | 说明 |
+|------|------|
+| `MtpCapability` | 当前模型是否支持 MTP、MTP 层数、是否已有校准结果、推荐 `draftMax` |
+| `MtpCalibrationRequest` | 校准范围：draftMax 自动扫描或手动上限、每轮生成 token 数、目标长 prompt token 数 |
+| `MtpCalibrationResult` | 校准是否支持、测试列表、最佳 trial、最佳 `draftMax` |
+| `MtpTrialResult` | 单次测试的速度、接受率、draft/accepted token 数等统计 |
+
+校准说明：
+
+- 校准任务走 TASK 通道，避免阻塞 CHAT 队列；上层可以用 async 方法在 UI 中显示“能力测试中”。
+- 校准使用内部生成的重型长上下文 workload，默认目标约 8k prompt tokens，并按当前 TASK context 自动保留生成 token、draft 窗口和安全余量。
+- 如果当前 context 太小，无法容纳至少 4096 prompt tokens 的重型 workload，校准会返回失败结果，不会退化为无意义的短 prompt 测试。
+- 默认校准使用 `maxDraftMax=0` 自动扫描：先测试保守初始范围；如果最佳 `draftMax` 贴近当前扫描边界，再逐步扩大范围，直到最佳值不再贴边、MTP 初始化失败或达到硬安全上限。
+- `maxDraftMax > 0` 表示高级调用手动指定扫描上限；这个上限是校准预算，不是模型能力上限。
+- 校准按 tokens/s 选择当前最优值，并缓存到当前 `LlamaEngine`。
+- `InferenceOptions.builder().mtpEnabled(true).build()` 未指定 `mtpDraftMax` 时，会使用缓存的推荐值；未校准时使用默认 `draftMax=3`。
+- 校准结果只保存在当前进程/当前引擎内；如果上层希望跨启动复用，需要自行持久化策略和环境信息。
+
 ### 2.2 向量
 
 ```java
@@ -165,8 +247,10 @@ List<RagSearchResult> search(String queryText, List<String> texts);
 - CHAT 请求会挂起正在执行的 TASK 任务（`taskSuspendOnChat=true`）
 - TASK 任务在 `preemptible=true` 时可被更高优先级 TASK 抢占
 - TASK 逻辑队列按 priority + FIFO 排序；TASK 接收不受热挂起槽数量限制。
-- TASK 挂起只使用冷挂起（COLD）：关闭当前 `LlamaCppContext` / KV，只保留 prompt、模型原始已生成文本和归一化输出状态，并回到 TASK 队列。
-- COLD 恢复时通过 replay `prompt + rawGeneratedText` 重建上下文，再继续生成；这会增加恢复时延，但不会为挂起任务额外保留 KV 显存。
+- TASK 挂起只使用冷挂起（COLD）：关闭当前 `LlamaCppContext` / KV，只保留格式化 prompt、prompt token ids、已生成 token ids、模型原始已生成文本和归一化输出状态，并回到 TASK 队列。
+- COLD 恢复优先使用 token ids 重建上下文，不再把已生成 raw text 重新 tokenize。标准推理在安全采样配置下可使用最近 context checkpoint + tail token replay；其他配置回退为 prompt token ids + generated token ids 全量 replay。这会增加恢复时延，但不会为挂起任务额外保留 GPU KV 显存。
+- MTP 冷恢复优先使用 target context checkpoint + `LlamaCppSpeculativeProcessor.beginFromRestoredTarget(...)`，并保留至少 1 个已输出 token 做 tail replay 来重建 draft context 和 pending 状态；如果 checkpoint 不可用或 restored-target 恢复失败，则回退为 token-id 全量 replay。
+- 当前 checkpoint 只在无 grammar、无随机采样、无重复/频率/存在惩罚的安全配置下用于快速恢复；复杂采样配置会回退为 token-id 全量 replay，因为 JJML 当前 context state 不包含 sampler chain / grammar 状态。
 - 如果 chat 在 COLD replay 期间到达，JJML 当前高层 API 无法可靠分片中断 replay，chat 需要等本次 replay 返回到可检查点后再执行；上层可通过 `inferenceEventListener` 的 `COLD_RESUME_STARTED/PREFILL_COMPLETED/COLD_RESUME_COMPLETED` 在 UI 中提示“后台任务恢复中可能稍慢”。
 
 ---
@@ -235,6 +319,49 @@ public class RagSearchResult {
 }
 ```
 
+### 3.4 InferenceOptions
+
+```java
+public final class InferenceOptions {
+    public static InferenceOptions defaults();
+    public static InferenceOptions mtpEnabled();
+    public static Builder builder();
+
+    public boolean isMtpEnabled();
+    public Integer getMtpDraftMax();
+    public Float getVulkanPriority();
+}
+```
+
+`InferenceOptions` 是不可变对象，提交任务时会复制快照。上层可以安全复用模板对象，也可以为每轮对话临时构建。
+
+### 3.5 MTP 相关结构
+
+```java
+public final class MtpCapability {
+    public boolean isSupported();
+    public int getMtpLayerCount();
+    public boolean isCalibrated();
+    public int getRecommendedDraftMax();
+    public MtpTrialResult getBestTrial();
+}
+
+public final class MtpCalibrationRequest {
+    // defaults(): maxDraftMax=0 表示自动扫描，不是固定测到某个模型上限
+    public MtpCalibrationRequest(int maxDraftMax, int maxTokens);
+    public MtpCalibrationRequest(int maxDraftMax, int maxTokens, int targetPromptTokens);
+    public static MtpCalibrationRequest defaults();
+}
+
+public final class MtpCalibrationResult {
+    public boolean isSupported();
+    public boolean hasBestTrial();
+    public int getBestDraftMax();
+    public List<MtpTrialResult> getTrials();
+    public String getMessage();
+}
+```
+
 ---
 
 ## 4. 服务状态
@@ -243,6 +370,8 @@ public class RagSearchResult {
 // 检查是否就绪
 boolean isReady();
 boolean supportsEnableThinking();
+boolean supportsMtp();
+MtpCapability getMtpCapability();
 
 // 检查队列容量
 boolean hasChatQueueCapacity();
@@ -268,3 +397,6 @@ void shutdown();
 | Lane 调度 | libs 内置：CHAT 优先，可暂停 TASK |
 | RagSearchResult | 只包含 content + score，不包含 id（libs 不知道业务 ID） |
 | 向量维度校验 | 维度不匹配时抛出异常，确保查询和文档使用同一 embedding 模型 |
+| 运行策略归属 | 采样参数放在 SamplerConfig；MTP / Vulkan 时间片放在 InferenceOptions |
+| MTP 策略 | 模型级能力探测，请求级启用，校准结果缓存在当前 LlamaEngine |
+| 视觉能力 | 当前文本推理路径不加载 mtmd/mmproj；视觉仍保持显式 opt-in，不在本接口中默认启用 |

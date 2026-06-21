@@ -79,6 +79,44 @@ tasks.register('manualLatencyBenchmark', JavaExec) {
     systemProperty 'tianshu.llm.enableThinking', System.getProperty('tianshu.llm.enableThinking', 'false')
 }
 
+tasks.register('manualMtpCalibrationBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Runs the heavy long-context MTP calibration benchmark and prints draftMax throughput.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualMtpCalibrationBenchmark'
+    systemProperty 'tianshu.llm.model', System.getProperty(
+            'tianshu.llm.model',
+            'D:\\AIPROJECT\\Qwen3.5-2B-Q4_K_M.gguf'
+    )
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.llm.chatThreads', System.getProperty('tianshu.llm.chatThreads', '4')
+    systemProperty 'tianshu.llm.taskThreads', System.getProperty('tianshu.llm.taskThreads', '4')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
+    systemProperty 'tianshu.mtp.maxDraftMax', System.getProperty('tianshu.mtp.maxDraftMax', '16')
+    systemProperty 'tianshu.mtp.maxTokens', System.getProperty('tianshu.mtp.maxTokens', '256')
+    systemProperty 'tianshu.mtp.targetPromptTokens', System.getProperty('tianshu.mtp.targetPromptTokens', '8192')
+}
+
+tasks.register('manualMtpLongOutputBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Runs a long-output MTP benchmark and prints draftMax throughput.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualMtpLongOutputBenchmark'
+    systemProperty 'tianshu.llm.model', System.getProperty(
+            'tianshu.llm.model',
+            'D:\\AIPROJECT\\Qwen3.5-2B-Q4_K_M.gguf'
+    )
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.llm.threads', System.getProperty('tianshu.llm.threads', '4')
+    systemProperty 'tianshu.llm.gpuIndex', System.getProperty('tianshu.llm.gpuIndex', '0')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
+    systemProperty 'tianshu.mtp.maxDraftMax', System.getProperty('tianshu.mtp.maxDraftMax', '8')
+    systemProperty 'tianshu.mtp.maxTokens', System.getProperty('tianshu.mtp.maxTokens', '1024')
+    systemProperty 'tianshu.mtp.targetPromptTokens', System.getProperty('tianshu.mtp.targetPromptTokens', '7000')
+}
+
 def generateNativeManifest = tasks.register('generateNativeManifest') {
     def nativeDir = layout.projectDirectory.dir('src/main/resources/natives/windows-x86_64')
     inputs.dir nativeDir
