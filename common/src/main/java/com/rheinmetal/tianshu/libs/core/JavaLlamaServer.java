@@ -3,6 +3,7 @@ package com.rheinmetal.tianshu.libs.core;
 import com.rheinmetal.tianshu.libs.llm.ChatMessage;
 import com.rheinmetal.tianshu.libs.llm.DeviceSelector;
 import com.rheinmetal.tianshu.libs.llm.EmbeddingEngine;
+import com.rheinmetal.tianshu.libs.llm.FlashAttentionMode;
 import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
 import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.InferenceOptions;
@@ -67,6 +68,7 @@ public class JavaLlamaServer {
                     config.device,
                     modelAlias,
                     config.modelProfile,
+                    config.flashAttentionMode,
                     config.cacheTypeK,
                     config.cacheTypeV,
                     config.taskSuspendOnChat,
@@ -325,6 +327,7 @@ public class JavaLlamaServer {
         copy.chatMaxQueueSize = source.chatMaxQueueSize;
         copy.taskThreads = source.taskThreads;
         copy.taskSuspendOnChat = source.taskSuspendOnChat;
+        copy.flashAttentionMode = source.flashAttentionMode;
         copy.cacheTypeK = source.cacheTypeK;
         copy.cacheTypeV = source.cacheTypeV;
         copy.requestTimeoutSeconds = source.requestTimeoutSeconds;
@@ -374,6 +377,11 @@ public class JavaLlamaServer {
 
         public Builder modelProfile(String name) {
             config.modelProfile = name;
+            return this;
+        }
+
+        public Builder flashAttention(FlashAttentionMode mode) {
+            config.flashAttentionMode = mode != null ? mode : FlashAttentionMode.ENABLED;
             return this;
         }
 

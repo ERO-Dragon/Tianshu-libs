@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
+import com.rheinmetal.tianshu.libs.llm.FlashAttentionMode;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
 
 public class ServerConfig {
@@ -34,6 +35,7 @@ public class ServerConfig {
     public int chatMaxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
     public int taskThreads = Math.max(1, Math.min(2, DEFAULT_THREAD_COUNT));
     public boolean taskSuspendOnChat = true;
+    public FlashAttentionMode flashAttentionMode = FlashAttentionMode.ENABLED;
     public KvCacheType cacheTypeK;
     public KvCacheType cacheTypeV;
     public int requestTimeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS;

@@ -1,5 +1,6 @@
 package com.rheinmetal.tianshu.libs.core;
 
+import com.rheinmetal.tianshu.libs.llm.FlashAttentionMode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -29,6 +30,18 @@ class ServerConfigTest {
                 .device("1")
                 .embeddingModel("embedding.gguf")
                 .embeddingDevice("0")
+                .build());
+    }
+
+    @Test
+    void flashAttentionCanBeConfigured() {
+        assertDoesNotThrow(() -> JavaLlamaServer.builder()
+                .model("dummy.gguf")
+                .flashAttention(FlashAttentionMode.DISABLED)
+                .build());
+        assertDoesNotThrow(() -> JavaLlamaServer.builder()
+                .model("dummy.gguf")
+                .flashAttention(null)
                 .build());
     }
 }

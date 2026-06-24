@@ -31,6 +31,7 @@ public class LlamaEngine {
     private final String device;
     private final String modelAlias;
     private final String modelProfile;
+    private final FlashAttentionMode flashAttentionMode;
     private final KvCacheType cacheTypeK;
     private final KvCacheType cacheTypeV;
     private final boolean taskSuspendOnChat;
@@ -60,6 +61,7 @@ public class LlamaEngine {
                         String device,
                         String modelAlias,
                         String modelProfile,
+                        FlashAttentionMode flashAttentionMode,
                         KvCacheType cacheTypeK,
                         KvCacheType cacheTypeV,
                         boolean taskSuspendOnChat,
@@ -72,6 +74,7 @@ public class LlamaEngine {
         this.device = device;
         this.modelAlias = modelAlias;
         this.modelProfile = modelProfile;
+        this.flashAttentionMode = flashAttentionMode != null ? flashAttentionMode : FlashAttentionMode.ENABLED;
         this.cacheTypeK = cacheTypeK;
         this.cacheTypeV = cacheTypeV;
         this.taskSuspendOnChat = taskSuspendOnChat;
@@ -114,11 +117,39 @@ public class LlamaEngine {
                                              KvCacheType cacheTypeV,
                                              boolean taskSuspendOnChat,
                                              Consumer<InferenceEvent> inferenceEventListener) throws Exception {
+        return loadChatEngine(
+                modelPath,
+                chatLaneConfig,
+                taskLaneConfig,
+                gpuLayers,
+                device,
+                modelAlias,
+                modelProfile,
+                FlashAttentionMode.ENABLED,
+                cacheTypeK,
+                cacheTypeV,
+                taskSuspendOnChat,
+                inferenceEventListener
+        );
+    }
+
+    public static LlamaEngine loadChatEngine(String modelPath,
+                                             LaneConfig chatLaneConfig,
+                                             LaneConfig taskLaneConfig,
+                                             int gpuLayers,
+                                             String device,
+                                             String modelAlias,
+                                             String modelProfile,
+                                             FlashAttentionMode flashAttentionMode,
+                                             KvCacheType cacheTypeK,
+                                             KvCacheType cacheTypeV,
+                                             boolean taskSuspendOnChat,
+                                             Consumer<InferenceEvent> inferenceEventListener) throws Exception {
         device = DeviceSelector.normalize(device);
         LlamaCppModel model = loadModel("chat", modelPath, gpuLayers, device);
         String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
         System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
-        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, cacheTypeK, cacheTypeV, taskSuspendOnChat, inferenceEventListener);
+        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, flashAttentionMode, cacheTypeK, cacheTypeV, taskSuspendOnChat, inferenceEventListener);
         engine.startWorker();
         return engine;
     }
@@ -363,7 +394,8 @@ public class LlamaEngine {
         LaneConfig config = lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig;
         ContextParams ctxParams = LlamaCppContext.defaultContextParams()
                 .with(ContextParam.n_ctx, config.getContextSize())
-                .with(ContextParam.n_threads, config.getThreadCount());
+                .with(ContextParam.n_threads, config.getThreadCount())
+                .with(ContextParam.flash_attn_type, flashAttentionMode.getJjmlType());
         if (cacheTypeK != null) ctxParams = ctxParams.with(ContextParam.type_k, cacheTypeK.getGgmlType());
         if (cacheTypeV != null) ctxParams = ctxParams.with(ContextParam.type_v, cacheTypeV.getGgmlType());
         int draftMax = resolveMtpDraftMax(options);
@@ -395,6 +427,7 @@ public class LlamaEngine {
     public int getThreadCount() { return chatLaneConfig.getThreadCount(); }
     public int getGpuLayers() { return gpuLayers; }
     public String getDevice() { return device; }
+    public FlashAttentionMode getFlashAttentionMode() { return flashAttentionMode; }
     public LaneConfig getChatLaneConfig() { return chatLaneConfig; }
     public LaneConfig getTaskLaneConfig() { return taskLaneConfig; }
     public KvCacheType getCacheTypeK() { return cacheTypeK; }
