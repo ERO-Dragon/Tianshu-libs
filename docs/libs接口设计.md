@@ -31,6 +31,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .chatMaxQueueSize(4)
     .gpuLayers(999)
     .device("0")                         // 可选：传给 JJML ModelParam.device
+    .flashAttention(FlashAttentionMode.ENABLED) // 可选：默认 ENABLED；也可 AUTO / DISABLED
     .cacheTypeK(KvCacheType.F16)          // 可选：F16 / Q8_0
     .cacheTypeV(KvCacheType.F16)          // 可选：F16 / Q8_0
     .taskThreads(2)
@@ -52,6 +53,19 @@ service.shutdown();   // 游戏关闭或模块卸载时释放资源
 ```
 
 `start()` 可能耗时较长，主包不应在 Minecraft 主线程中同步阻塞等待模型加载。
+
+模型级推理参数说明：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `contextSize` | `16000` | LLM 上下文窗口大小；模型加载服务后固定，CHAT / TASK 共用同一配置 |
+| `gpuLayers` | `999` | 交给 JJML / llama.cpp 的 GPU offload 层数；通常用于尽量全量放到 GPU |
+| `device` | `null` | 可选设备选择器；纯数字会规范化为 JJML 设备索引格式，例如 `"0"` -> `"#0"` |
+| `flashAttention` | `FlashAttentionMode.ENABLED` | Flash Attention 模式；属于 context/runtime 结构配置，不是单次请求参数 |
+| `cacheTypeK` | `null` | K cache 类型；`null` 表示使用 JJML 默认值，可显式设置 `F16` / `Q8_0` |
+| `cacheTypeV` | `null` | V cache 类型；`null` 表示使用 JJML 默认值，可显式设置 `F16` / `Q8_0` |
+
+`flashAttention`、`cacheTypeK`、`cacheTypeV` 都会在创建 `LlamaCppContext` 时写入 JJML context params，因此它们是服务级配置：同一个 `JavaLlamaServer` 实例内的 `chat` / `task` 会使用同一组设置。如果需要对比不同 FA 或 KV cache 配置，应创建不同服务实例或重新加载模型服务。
 
 ### 2.1 推理
 
@@ -319,7 +333,28 @@ public class RagSearchResult {
 }
 ```
 
-### 3.4 InferenceOptions
+### 3.4 FlashAttentionMode 与 KvCacheType
+
+```java
+public enum FlashAttentionMode {
+    AUTO,      // 交给 JJML / llama.cpp 自动判断
+    DISABLED,  // 显式关闭 Flash Attention
+    ENABLED    // 显式开启 Flash Attention；libs 默认值
+}
+
+public enum KvCacheType {
+    F16,
+    Q8_0
+}
+```
+
+说明：
+
+- `FlashAttentionMode` 是模型/context 级配置，通过 `JavaLlamaServer.Builder.flashAttention(...)` 设置，默认 `ENABLED`。
+- `KvCacheType` 是 KV cache 量化配置，通过 `cacheTypeK(...)` 和 `cacheTypeV(...)` 设置；不设置时保留 JJML 默认值。
+- 这两类参数都会影响 context 创建方式和显存/性能特征，因此不放入 `InferenceOptions`，也不建议在单轮对话级别频繁切换。
+
+### 3.5 InferenceOptions
 
 ```java
 public final class InferenceOptions {
@@ -335,7 +370,7 @@ public final class InferenceOptions {
 
 `InferenceOptions` 是不可变对象，提交任务时会复制快照。上层可以安全复用模板对象，也可以为每轮对话临时构建。
 
-### 3.5 MTP 相关结构
+### 3.6 MTP 相关结构
 
 ```java
 public final class MtpCapability {
@@ -397,6 +432,7 @@ void shutdown();
 | Lane 调度 | libs 内置：CHAT 优先，可暂停 TASK |
 | RagSearchResult | 只包含 content + score，不包含 id（libs 不知道业务 ID） |
 | 向量维度校验 | 维度不匹配时抛出异常，确保查询和文档使用同一 embedding 模型 |
-| 运行策略归属 | 采样参数放在 SamplerConfig；MTP / Vulkan 时间片放在 InferenceOptions |
+| 模型级运行参数 | contextSize / flashAttention / cacheTypeK / cacheTypeV 放在 Builder；创建 context 时统一生效 |
+| 请求级运行策略 | 采样参数放在 SamplerConfig；MTP / Vulkan 时间片放在 InferenceOptions |
 | MTP 策略 | 模型级能力探测，请求级启用，校准结果缓存在当前 LlamaEngine |
 | 视觉能力 | 当前文本推理路径不加载 mtmd/mmproj；视觉仍保持显式 opt-in，不在本接口中默认启用 |
