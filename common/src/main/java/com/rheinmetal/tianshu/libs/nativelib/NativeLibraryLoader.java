@@ -78,8 +78,8 @@ public final class NativeLibraryLoader {
 
     private static String verifyJjml() {
         try {
-            String ggmlPath = System.getProperty("jjml.libpath.ggml");
-            String llamaPath = System.getProperty("jjml.libpath.llamacpp");
+            String ggmlPath = System.getProperty("org.argeo.jjml.llm.ggml.libpath");
+            String llamaPath = System.getProperty("org.argeo.jjml.llm.llama.libpath");
             String jjmlGgmlPath = System.getProperty("jjml.libpath.jjml.ggml");
             String jjmlLlmPath = System.getProperty("jjml.libpath.jjml.llm");
             if (isRegularFile(ggmlPath) && isRegularFile(llamaPath)
@@ -285,8 +285,6 @@ public final class NativeLibraryLoader {
         Path jjmlGgml = requiredLibrary(nativeDir, "Java_org_argeo_jjml_ggml.dll");
         Path jjmlLlm = requiredLibrary(nativeDir, "Java_org_argeo_jjml_llm.dll");
 
-        System.setProperty("jjml.libpath.ggml", ggml.toAbsolutePath().toString());
-        System.setProperty("jjml.libpath.llamacpp", llama.toAbsolutePath().toString());
         System.setProperty("jjml.libpath.jjml.ggml", jjmlGgml.toAbsolutePath().toString());
         System.setProperty("jjml.libpath.jjml.llm", jjmlLlm.toAbsolutePath().toString());
         prependJavaLibraryPath(nativeDir);
