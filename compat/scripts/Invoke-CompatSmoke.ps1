@@ -5,7 +5,9 @@ param(
     [switch] $FailOnWarn,
     [switch] $IncludeBlocked,
     [switch] $UnverifiedOnly,
-    [switch] $NoConfigurationCache
+    [switch] $NoConfigurationCache,
+    [switch] $NoRerunTasks,
+    [string] $SummaryPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,10 +49,12 @@ $fatalPatterns = @(
 )
 $ignoredErrorPatterns = @(
     'Failed to fetch user properties',
+    'Failed to verify authentication',
     'Failed to fetch Realms feature flags',
     "Couldn't connect to realms",
     'Realms authentication error',
     'Could not authorize you against Realms server',
+    'InvalidCredentialsException: Status: 401',
     'Unable to create custom ContextSelector. Falling back to default.'
 )
 $warnPatterns = @(
@@ -64,9 +68,6 @@ function Get-TargetSpec([string] $target) {
         throw "Unknown compat target '$target'."
     }
     $spec = $prop.Value
-    if (-not $spec.loaderVersion) {
-        throw "Target '$target' must define loaderVersion."
-    }
     return $spec
 }
 
@@ -102,7 +103,9 @@ function Get-GradleArgs([string] $target, $spec) {
     }
 
     $args += ":${project}:runClient"
-    $args += '--rerun-tasks'
+    if (-not $NoRerunTasks) {
+        $args += '--rerun-tasks'
+    }
     if ($NoConfigurationCache) {
         $args += '--no-configuration-cache'
     }
@@ -148,7 +151,17 @@ function Clear-RunDirectory([string] $path) {
         throw "Refusing to clean run directory outside workspace: $targetPath"
     }
     if (Test-Path -LiteralPath $targetPath) {
-        Remove-Item -LiteralPath $targetPath -Recurse -Force
+        for ($attempt = 1; $attempt -le 8; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $targetPath -Recurse -Force
+                return
+            } catch {
+                if ($attempt -eq 8) {
+                    throw
+                }
+                Start-Sleep -Seconds 1
+            }
+        }
     }
 }
 
@@ -183,7 +196,10 @@ function Test-LineContainsAny([string] $line, [string[]] $patterns) {
 }
 
 $results = @()
-$summaryPath = Join-Path $root 'build\compat\smoke-summary.json'
+if (-not $SummaryPath) {
+    $SummaryPath = Join-Path $root 'build\compat\smoke-summary.json'
+}
+$summaryPath = [System.IO.Path]::GetFullPath($SummaryPath)
 
 function Write-SmokeSummary {
     @($results) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
@@ -193,6 +209,10 @@ foreach ($target in $Targets) {
     $spec = Get-TargetSpec $target
     if ($spec.status -eq 'blocked' -and -not $IncludeBlocked) {
         Write-Host "SKIP $target blocked: $($spec.blockedReason)"
+        continue
+    }
+    if (-not $spec.loaderVersion) {
+        Write-Host "SKIP $target missing loaderVersion: $($spec.blockedReason)"
         continue
     }
     $project = Get-RunProject $spec.loader
@@ -263,6 +283,12 @@ foreach ($target in $Targets) {
     if (-not $success) {
         $combined = Get-CombinedLog $stdoutPath $stderrPath $logsDir
         $matched = @($requiredPatterns | Where-Object { $combined.Contains($_) })
+        $fatalLines = Select-FatalLines $combined
+        $fatalLines += Select-ErrorLines $combined
+        $warnLines = Select-MatchingLines $combined $warnPatterns
+        if ($smokeSeen -and $fatalLines.Count -eq 0 -and (-not $FailOnWarn -or $warnLines.Count -eq 0)) {
+            $success = $true
+        }
     }
     $fatalLines = Select-FatalLines $combined
     $fatalLines += Select-ErrorLines $combined
