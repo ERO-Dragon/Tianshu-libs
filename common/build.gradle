@@ -79,6 +79,22 @@ tasks.register('manualLatencyBenchmark', JavaExec) {
     systemProperty 'tianshu.llm.enableThinking', System.getProperty('tianshu.llm.enableThinking', 'false')
 }
 
+tasks.register('manualUsageSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Loads a GGUF model and smoke-tests token count plus usage-returning chat/task APIs.'
+    workingDir = rootProject.projectDir
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualUsageSmoke'
+    systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '4096')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.llm.maxTokens', System.getProperty('tianshu.llm.maxTokens', '32')
+    systemProperty 'tianshu.llm.chatThreads', System.getProperty('tianshu.llm.chatThreads', '4')
+    systemProperty 'tianshu.llm.modelProfile', System.getProperty('tianshu.llm.modelProfile', 'auto')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
+    systemProperty 'tianshu.llm.outputFile', System.getProperty('tianshu.llm.outputFile', '')
+}
+
 tasks.register('manualMtpCalibrationBenchmark', JavaExec) {
     group = 'verification'
     description = 'Runs the heavy long-context MTP calibration benchmark and prints draftMax throughput.'

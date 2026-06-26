@@ -71,21 +71,24 @@ service.shutdown();   // 游戏关闭或模块卸载时释放资源
 
 ```java
 // 简单聊天
-String chat(String message, String systemPrompt);
-String chat(String message, String systemPrompt, ThinkingMode thinkingMode);
+CompletableFuture<String> chat(String message, String systemPrompt);
+CompletableFuture<String> chat(String message, String systemPrompt, ThinkingMode thinkingMode);
 
-// 同步聊天
-String chat(List<ChatMessage> messages);
-String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens);
-String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options);
+// 聊天；返回 future，可通过 cancel(false) 取消本次 chat
+CompletableFuture<String> chat(List<ChatMessage> messages);
+CompletableFuture<String> chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens);
+CompletableFuture<String> chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options);
+CompletableFuture<LlmGenerationResult> chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens);
+CompletableFuture<LlmGenerationResult> chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options);
 
 // 流式聊天
-void chatStream(String message, String systemPrompt, Consumer<String> onToken);
-void chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken);
-void chatStream(List<ChatMessage> messages, Consumer<String> onToken);
-void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken);
-void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken);
-void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken);
+CompletableFuture<String> chatStream(String message, String systemPrompt, Consumer<String> onToken);
+CompletableFuture<String> chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, Consumer<String> onToken);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken, Consumer<LlmStreamFinish> onFinish);
 
 // 后台任务（可被 chat 暂停）- 同步返回
 CompletableFuture<String> task(List<ChatMessage> messages);
@@ -158,7 +161,7 @@ InferenceOptions options = InferenceOptions.builder()
     .vulkanPriority(0.35f)     // 0.0~1.0；值越低越倾向于给游戏渲染让路
     .build();
 
-String reply = service.chat(messages, sampler, 256, options);
+String reply = service.chat(messages, sampler, 256, options).get();
 ```
 
 字段语义：

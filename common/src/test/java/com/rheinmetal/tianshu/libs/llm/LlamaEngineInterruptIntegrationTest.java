@@ -60,11 +60,11 @@ class LlamaEngineInterruptIntegrationTest {
         assertTrue(service.isReady());
 
         SamplerConfig sampler = deterministicSampler(false);
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly this word: READY")),
                 sampler,
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         StringBuilder streamed = new StringBuilder();
@@ -98,11 +98,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(capture.await(90), "task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: INTERRUPT_OK")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         String result = task.get(240, TimeUnit.SECONDS);
@@ -129,11 +129,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(capture.await(120), "MTP task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: MTP_INTERRUPT_OK")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         String result = task.get(360, TimeUnit.SECONDS);
@@ -159,11 +159,11 @@ class LlamaEngineInterruptIntegrationTest {
 
         for (int i = 0; i < 3; i++) {
             assertTrue(capture.awaitMore(15, 120), "task stream did not progress before interrupt " + i);
-            String chat = service.chat(
+            String chat = awaitChat(service.chat(
                     List.of(ChatMessage.user("Reply with exactly: CHAT_" + i)),
                     deterministicSampler(false),
                     24
-            );
+            ));
             assertUsableOutput(chat);
         }
 
@@ -223,11 +223,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(capture.await(90), "task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: CANCEL_INTERRUPT")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         assertTrue(task.cancel(false));
@@ -275,11 +275,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(90), "high priority task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: CHAT_DURING_PREEMPTION")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         String highResult = high.get(180, TimeUnit.SECONDS);
@@ -322,11 +322,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(120), "high priority task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: CHAT_DURING_MTP_PREEMPTION")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         String highResult = high.get(240, TimeUnit.SECONDS);
@@ -373,11 +373,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(180), "high priority task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: LONG_MTP_CHAT")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         int countAtColdResume = lowCapture.tokenCount();
@@ -443,11 +443,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(90), "high priority task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: CHAT_DURING_THINK")),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
 
         String highResult = high.get(180, TimeUnit.SECONDS);
@@ -498,7 +498,7 @@ class LlamaEngineInterruptIntegrationTest {
                 taskPrompt(longRealtimeChatPrompt()),
                 deterministicSampler(false),
                 capture::accept
-        );
+        ).get(300, TimeUnit.SECONDS);
         long finishedNanos = System.nanoTime();
 
         assertUsableOutput(capture.text());
@@ -588,11 +588,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(120), "high priority perf task did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: PERF_CHAT")),
                 deterministicSampler(false),
                 32
-        );
+        ));
         assertUsableOutput(chat);
 
         int countAtColdResume = lowCapture.tokenCount();
@@ -781,11 +781,11 @@ class LlamaEngineInterruptIntegrationTest {
         );
 
         assertTrue(highCapture.await(90), "sample high priority task stream did not start");
-        String chat = service.chat(
+        String chat = awaitChat(service.chat(
                 List.of(ChatMessage.user("Reply with exactly: CHAT_SAMPLE_" + index)),
                 deterministicSampler(false),
                 24
-        );
+        ));
         assertUsableOutput(chat);
         assertUsableOutput(high.get(180, TimeUnit.SECONDS));
 
@@ -813,7 +813,11 @@ class LlamaEngineInterruptIntegrationTest {
                 deterministicSampler(thinking),
                 ignored -> {
                 }
-        );
+        ).get(300, TimeUnit.SECONDS);
+    }
+
+    private String awaitChat(CompletableFuture<String> chat) throws Exception {
+        return chat.get(180, TimeUnit.SECONDS);
     }
 
     private void assertUsableOutput(String output) {

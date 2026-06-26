@@ -107,7 +107,7 @@ public class ManualLatencyBenchmark {
                 chunks.incrementAndGet();
                 chars.addAndGet(chunk.length());
                 response.append(chunk);
-            });
+            }).get();
         } finally {
             currentRun.compareAndSet(probe, RunProbe.noop());
         }

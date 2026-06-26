@@ -765,9 +765,9 @@ public class TaskExecutor implements Runnable {
 
     private void completeGeneration(InferenceTask task, String text, LlmTokenUsage usage) {
         LlmGenerationResult result = new LlmGenerationResult(text, usage);
+        publishStreamFinish(task, StreamFinishType.COMPLETED, usage, null);
         task.getSyncFuture().complete(text);
         task.getGenerationFuture().complete(result);
-        publishStreamFinish(task, StreamFinishType.COMPLETED, usage, null);
     }
 
     private void publishStreamFinish(InferenceTask task, StreamFinishType type, LlmTokenUsage usage, Throwable error) {

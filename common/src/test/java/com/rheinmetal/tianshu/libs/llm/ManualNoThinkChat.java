@@ -76,7 +76,7 @@ public class ManualNoThinkChat {
                     response.append(chunk);
                     System.out.print(chunk);
                     System.out.flush();
-                });
+                }).get();
                 long endNanos = System.nanoTime();
 
                 history.add(ChatMessage.assistant(response.toString()));

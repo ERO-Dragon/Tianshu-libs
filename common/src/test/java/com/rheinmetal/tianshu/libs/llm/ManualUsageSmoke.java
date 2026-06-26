@@ -77,7 +77,8 @@ public class ManualUsageSmoke {
             System.out.println("countChatPromptTokens=" + countedPromptTokens);
             writeOutput(output, "countChatPromptTokens", Integer.toString(countedPromptTokens));
 
-            LlmGenerationResult chat = service.chatWithUsage(messages, sampler, maxTokens);
+            LlmGenerationResult chat = service.chatWithUsage(messages, sampler, maxTokens)
+                    .get(300, TimeUnit.SECONDS);
             assertUsage("chatWithUsage", countedPromptTokens, chat.usage());
             System.out.println("chatWithUsage.text=" + compact(chat.text()));
             printUsage("chatWithUsage", chat.usage());
@@ -85,7 +86,8 @@ public class ManualUsageSmoke {
 
             AtomicReference<LlmStreamFinish> chatFinish = new AtomicReference<>();
             StringBuilder chatStreamText = new StringBuilder();
-            service.chatStream(messages, sampler, maxTokens, null, chatStreamText::append, chatFinish::set);
+            service.chatStream(messages, sampler, maxTokens, null, chatStreamText::append, chatFinish::set)
+                    .get(300, TimeUnit.SECONDS);
             assertFinish("chatStream", countedPromptTokens, chatFinish.get());
             System.out.println("chatStream.text=" + compact(chatStreamText.toString()));
             printUsage("chatStream", chatFinish.get().usage());
@@ -118,6 +120,7 @@ public class ManualUsageSmoke {
             writeStreamResult(output, "taskStreamWithUsage", taskStreamText.toString(), taskFinish.get());
 
             runTaskInterruptedByChat(service, sampler, maxTokens);
+            runChatCancellation(service, sampler);
             runTaskCancellation(service, sampler);
             runQueuedCancellation(service, sampler);
         } finally {
@@ -157,7 +160,8 @@ public class ManualUsageSmoke {
 
         List<ChatMessage> chatMessages = List.of(ChatMessage.user("Reply with exactly: CHAT_INTERRUPT_OK"));
         int chatPromptTokens = service.countChatPromptTokens(chatMessages, sampler);
-        LlmGenerationResult chat = service.chatWithUsage(chatMessages, sampler, maxTokens);
+        LlmGenerationResult chat = service.chatWithUsage(chatMessages, sampler, maxTokens)
+                .get(300, TimeUnit.SECONDS);
         assertUsage("interrupt.chatWithUsage", chatPromptTokens, chat.usage());
 
         LlmGenerationResult taskResult = task.get(300, TimeUnit.SECONDS);
@@ -168,6 +172,43 @@ public class ManualUsageSmoke {
         }
         printUsage("interrupt.chatWithUsage", chat.usage());
         printUsage("interrupt.taskStreamWithUsage", taskResult.usage());
+    }
+
+    private static void runChatCancellation(JavaLlamaServer service, SamplerConfig sampler) throws Exception {
+        List<ChatMessage> messages = List.of(
+                ChatMessage.system("You are a concise smoke-test assistant. Do not reason step by step."),
+                ChatMessage.user("Write 200 comma-separated integers starting from 1.")
+        );
+        CountDownLatch firstToken = new CountDownLatch(1);
+        AtomicReference<LlmStreamFinish> finish = new AtomicReference<>();
+        CompletableFuture<String> chat = service.chatStream(
+                messages,
+                sampler,
+                240,
+                null,
+                token -> firstToken.countDown(),
+                finish::set
+        );
+        if (!firstToken.await(120, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("cancel smoke chat did not start streaming");
+        }
+        if (!chat.cancel(false)) {
+            throw new IllegalStateException("cancel smoke chat did not accept cancellation");
+        }
+        try {
+            chat.get(30, TimeUnit.SECONDS);
+            throw new IllegalStateException("cancelled chat unexpectedly completed normally");
+        } catch (CancellationException expected) {
+            // expected
+        }
+        LlmStreamFinish cancelled = awaitFinish("cancel.chatStream", finish, 30);
+        if (cancelled.type() != StreamFinishType.CANCELLED) {
+            throw new IllegalStateException("chat cancel finish type should be CANCELLED: " + cancelled.type());
+        }
+        System.out.println("cancel.chatStream.usage prompt="
+                + cancelled.usage().promptTokens()
+                + " completion=" + cancelled.usage().completionTokens()
+                + " total=" + cancelled.usage().totalTokens());
     }
 
     private static void runTaskCancellation(JavaLlamaServer service, SamplerConfig sampler) throws Exception {

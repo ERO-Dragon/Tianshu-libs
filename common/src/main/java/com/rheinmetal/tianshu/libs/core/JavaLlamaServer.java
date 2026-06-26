@@ -125,71 +125,71 @@ public class JavaLlamaServer {
         started.set(false);
     }
 
-    public String chat(String message, String systemPrompt) throws Exception {
+    public CompletableFuture<String> chat(String message, String systemPrompt) {
         return chat(toMessages(message, systemPrompt));
     }
 
-    public String chat(String message, String systemPrompt, ThinkingMode thinkingMode) throws Exception {
+    public CompletableFuture<String> chat(String message, String systemPrompt, ThinkingMode thinkingMode) {
         SamplerConfig sampler = new SamplerConfig();
         sampler.setThinkingMode(thinkingMode);
         return chat(toMessages(message, systemPrompt), sampler, 0);
     }
 
-    public String chat(List<ChatMessage> messages) throws Exception {
+    public CompletableFuture<String> chat(List<ChatMessage> messages) {
         return chat(messages, null, 0);
     }
 
-    public String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+    public CompletableFuture<String> chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) {
         return requireLibsApi().chat(messages, sampler, maxTokens);
     }
 
-    public String chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+    public CompletableFuture<String> chat(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) {
         return requireLibsApi().chat(messages, sampler, maxTokens, options);
     }
 
-    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+    public CompletableFuture<LlmGenerationResult> chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) {
         return requireLibsApi().chatWithUsage(messages, sampler, maxTokens);
     }
 
-    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+    public CompletableFuture<LlmGenerationResult> chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) {
         return requireLibsApi().chatWithUsage(messages, sampler, maxTokens, options);
     }
 
-    public void chatStream(String message, String systemPrompt, Consumer<String> onToken) throws Exception {
-        chatStream(toMessages(message, systemPrompt), null, onToken);
+    public CompletableFuture<String> chatStream(String message, String systemPrompt, Consumer<String> onToken) {
+        return chatStream(toMessages(message, systemPrompt), null, onToken);
     }
 
-    public void chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken) throws Exception {
-        chatStream(toMessages(message, systemPrompt), null, maxTokens, onToken);
+    public CompletableFuture<String> chatStream(String message, String systemPrompt, int maxTokens, Consumer<String> onToken) {
+        return chatStream(toMessages(message, systemPrompt), null, maxTokens, onToken);
     }
 
-    public void chatStream(List<ChatMessage> messages, Consumer<String> onToken) throws Exception {
-        chatStream(messages, null, onToken);
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages, Consumer<String> onToken) {
+        return chatStream(messages, null, onToken);
     }
 
-    public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) throws Exception {
-        requireLibsApi().chatStream(messages, sampler, onToken);
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, Consumer<String> onToken) {
+        return requireLibsApi().chatStream(messages, sampler, onToken);
     }
 
-    public void chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken) throws Exception {
-        requireLibsApi().chatStream(messages, sampler, maxTokens, onToken);
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken) {
+        return requireLibsApi().chatStream(messages, sampler, maxTokens, onToken);
     }
 
-    public void chatStream(List<ChatMessage> messages,
-                           SamplerConfig sampler,
-                           int maxTokens,
-                           InferenceOptions options,
-                           Consumer<String> onToken) throws Exception {
-        requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken);
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                InferenceOptions options,
+                                                Consumer<String> onToken) {
+        return requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken);
     }
 
-    public void chatStream(List<ChatMessage> messages,
-                           SamplerConfig sampler,
-                           int maxTokens,
-                           InferenceOptions options,
-                           Consumer<String> onToken,
-                           Consumer<LlmStreamFinish> onFinish) throws Exception {
-        requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken, onFinish);
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                InferenceOptions options,
+                                                Consumer<String> onToken,
+                                                Consumer<LlmStreamFinish> onFinish) {
+        return requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken, onFinish);
     }
 
     public CompletableFuture<String> task(List<ChatMessage> messages,
