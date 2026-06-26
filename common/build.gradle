@@ -133,6 +133,29 @@ tasks.register('manualMtpLongOutputBenchmark', JavaExec) {
     systemProperty 'tianshu.mtp.targetPromptTokens', System.getProperty('tianshu.mtp.targetPromptTokens', '7000')
 }
 
+tasks.register('manualProductionSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Runs a production-like smoke test covering events, backpressure, cold resume, MTP, and embeddings.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualProductionSmoke'
+    systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
+    systemProperty 'tianshu.embedding.model', System.getProperty('tianshu.embedding.model', '')
+    systemProperty 'tianshu.llm.modelProfile', System.getProperty('tianshu.llm.modelProfile', 'auto')
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.embedding.context', System.getProperty('tianshu.embedding.context', '8192')
+    systemProperty 'tianshu.llm.chatThreads', System.getProperty('tianshu.llm.chatThreads', '4')
+    systemProperty 'tianshu.llm.taskThreads', System.getProperty('tianshu.llm.taskThreads', '2')
+    systemProperty 'tianshu.embedding.threads', System.getProperty('tianshu.embedding.threads', '4')
+    systemProperty 'tianshu.llm.chatMaxQueueSize', System.getProperty('tianshu.llm.chatMaxQueueSize', '1')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.embedding.gpuLayers', System.getProperty('tianshu.embedding.gpuLayers', '999')
+    systemProperty 'tianshu.llm.taskMaxTokens', System.getProperty('tianshu.llm.taskMaxTokens', '240')
+    systemProperty 'tianshu.llm.longPromptRepeats', System.getProperty('tianshu.llm.longPromptRepeats', '80')
+    systemProperty 'tianshu.mtp.draftMax', System.getProperty('tianshu.mtp.draftMax', '1')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
+    systemProperty 'tianshu.embedding.device', System.getProperty('tianshu.embedding.device', '')
+}
+
 def generateNativeManifest = tasks.register('generateNativeManifest') {
     def nativeDir = layout.projectDirectory.dir('src/main/resources/natives/windows-x86_64')
     inputs.dir nativeDir

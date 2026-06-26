@@ -7,6 +7,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class SamplerConfig {
+    private static final float MAX_TEMPERATURE = 10.0f;
+    private static final float MAX_PENALTY_REPEAT = 10.0f;
+    private static final float MIN_ADDITIVE_PENALTY = -10.0f;
+    private static final float MAX_ADDITIVE_PENALTY = 10.0f;
+
     public Float temperature;
     public Integer topK;
     public Float topP;
@@ -61,6 +66,22 @@ public class SamplerConfig {
 
     public SamplerConfig copy() {
         return new SamplerConfig(this);
+    }
+
+    public void validate() {
+        requireFiniteRange(temperature(), 0.0f, MAX_TEMPERATURE, "temperature");
+        requireNonNegative(topK(), "topK");
+        requireFiniteRange(topP(), 0.0f, 1.0f, "topP");
+        requireFiniteRange(minP(), 0.0f, 1.0f, "minP");
+        requireFiniteRange(penaltyRepeat(), 0.0f, MAX_PENALTY_REPEAT, "penaltyRepeat");
+        requireFiniteRange(penaltyFreq(), MIN_ADDITIVE_PENALTY, MAX_ADDITIVE_PENALTY, "penaltyFreq");
+        requireFiniteRange(penaltyPresent(), MIN_ADDITIVE_PENALTY, MAX_ADDITIVE_PENALTY, "penaltyPresent");
+        if (penaltyLastN() < -1) {
+            throw new IllegalArgumentException("penaltyLastN must be -1 or greater");
+        }
+        if (hasGrammar() && (grammarRoot == null || grammarRoot.isBlank())) {
+            throw new IllegalArgumentException("grammarRoot cannot be blank when grammarStr is set");
+        }
     }
 
     public Float getTemperature() { return temperature; }
@@ -141,4 +162,16 @@ public class SamplerConfig {
         return thinkingMode != null ? thinkingMode : ThinkingMode.AUTO;
     }
     Map<String, String> chatTemplateKwargs() { return chatTemplateKwargs != null ? chatTemplateKwargs : Collections.emptyMap(); }
+
+    private static void requireFiniteRange(float value, float min, float max, String option) {
+        if (!Float.isFinite(value) || value < min || value > max) {
+            throw new IllegalArgumentException(option + " must be finite and between " + min + " and " + max);
+        }
+    }
+
+    private static void requireNonNegative(int value, String option) {
+        if (value < 0) {
+            throw new IllegalArgumentException(option + " cannot be negative");
+        }
+    }
 }

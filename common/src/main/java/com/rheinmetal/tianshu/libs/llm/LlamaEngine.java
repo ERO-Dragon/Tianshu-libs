@@ -438,8 +438,10 @@ public class LlamaEngine {
         if (messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("messages cannot be null or empty");
         }
+        SamplerConfig effectiveConfig = config != null ? config.copy() : new SamplerConfig();
+        effectiveConfig.validate();
         synchronized (model) {
-            return ChatPromptTemplate.countTokens(model, messages, config);
+            return ChatPromptTemplate.countTokens(model, messages, effectiveConfig);
         }
     }
 

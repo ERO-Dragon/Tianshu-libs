@@ -90,6 +90,7 @@ public class InferenceTask {
         this.lane = lane;
         this.messages = messages;
         this.samplerConfig = samplerConfig != null ? samplerConfig.copy() : new SamplerConfig();
+        this.samplerConfig.validate();
         this.inferenceOptions = inferenceOptions != null ? inferenceOptions.copy() : InferenceOptions.defaults();
         this.maxTokens = maxTokens;
         this.taskPriority = taskPriority;
