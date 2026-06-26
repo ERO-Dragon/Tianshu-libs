@@ -1,6 +1,7 @@
 package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.LlamaCppContext;
+import org.argeo.jjml.llm.LlamaCppChatMessage;
 import org.argeo.jjml.llm.LlamaCppModel;
 import org.argeo.jjml.llm.SpeculativeParams;
 import org.argeo.jjml.llm.params.ContextParam;
@@ -12,6 +13,7 @@ import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -259,7 +261,9 @@ public class LlamaEngine {
             if (!accepted) {
                 pendingChatTasks.decrementAndGet();
                 task.cancel();
-                task.getSyncFuture().completeExceptionally(new RejectedExecutionException("chat inference queue is full"));
+                RejectedExecutionException error = new RejectedExecutionException("chat inference queue is full");
+                task.getSyncFuture().completeExceptionally(error);
+                task.getGenerationFuture().completeExceptionally(error);
                 return;
             }
             publishInferenceEvent(task, InferenceEventType.QUEUED, "Chat request requeued.");
@@ -277,7 +281,9 @@ public class LlamaEngine {
             if (chatQueue.remove(task)) {
                 pendingChatTasks.decrementAndGet();
                 task.getSyncFuture().cancel(false);
+                task.getGenerationFuture().cancel(false);
                 task.getMtpCalibrationFuture().cancel(false);
+                publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
                 publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued chat request was cancelled.");
                 return;
             }
@@ -287,7 +293,9 @@ public class LlamaEngine {
         boolean removed = taskQueue.removeIf(queued -> queued.wraps(task));
         if (removed) {
             task.getSyncFuture().cancel(false);
+            task.getGenerationFuture().cancel(false);
             task.getMtpCalibrationFuture().cancel(false);
+            publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
             publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled.");
             finishTask(task);
             notifyTaskArrival();
@@ -419,6 +427,22 @@ public class LlamaEngine {
         mtpAutoTuner.record(trial);
     }
 
+    PromptSnapshot promptSnapshot(List<LlamaCppChatMessage> messages, SamplerConfig config) {
+        synchronized (model) {
+            return ChatPromptTemplate.snapshot(model, messages, config);
+        }
+    }
+
+    public int countChatPromptTokens(List<LlamaCppChatMessage> messages, SamplerConfig config) {
+        if (!running) throw new IllegalStateException("Engine is shutting down");
+        if (messages == null || messages.isEmpty()) {
+            throw new IllegalArgumentException("messages cannot be null or empty");
+        }
+        synchronized (model) {
+            return ChatPromptTemplate.countTokens(model, messages, config);
+        }
+    }
+
     LlamaCppModel getModel() { return model; }
     public String getEngineName() { return engineName; }
     public String getModelAlias() { return modelAlias; }
@@ -481,7 +505,9 @@ public class LlamaEngine {
         if (active != null) {
             active.cancel();
             active.getSyncFuture().cancel(false);
+            active.getGenerationFuture().cancel(false);
             active.getMtpCalibrationFuture().cancel(false);
+            publishStreamFinish(active, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
             publishInferenceEvent(active, InferenceEventType.CANCELLED, "Active inference was cancelled during shutdown.");
             finishTask(active);
         }
@@ -514,7 +540,9 @@ public class LlamaEngine {
             pendingChatTasks.decrementAndGet();
             chatTask.cancel();
             chatTask.getSyncFuture().cancel(false);
+            chatTask.getGenerationFuture().cancel(false);
             chatTask.getMtpCalibrationFuture().cancel(false);
+            publishStreamFinish(chatTask, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
             publishInferenceEvent(chatTask, InferenceEventType.CANCELLED, "Queued chat request was cancelled during shutdown.");
         }
 
@@ -523,9 +551,19 @@ public class LlamaEngine {
             InferenceTask task = taskTask.getTask();
             task.cancel();
             task.getSyncFuture().cancel(false);
+            task.getGenerationFuture().cancel(false);
             task.getMtpCalibrationFuture().cancel(false);
+            publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
             publishInferenceEvent(task, InferenceEventType.CANCELLED, "Queued task request was cancelled during shutdown.");
             finishTask(task);
+        }
+    }
+
+    private void publishStreamFinish(InferenceTask task, StreamFinishType type, LlmTokenUsage usage, Throwable error) {
+        if (task == null || task.getFinishCallback() == null) return;
+        try {
+            task.getFinishCallback().accept(new LlmStreamFinish(type, usage, error));
+        } catch (Exception ignored) {
         }
     }
 

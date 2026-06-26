@@ -28,7 +28,9 @@ public class InferenceTask {
     private final int taskPriority;
     private final boolean taskPreemptible;
     private final Consumer<String> streamCallback;
+    private final Consumer<LlmStreamFinish> finishCallback;
     private final CompletableFuture<String> syncFuture;
+    private final CompletableFuture<LlmGenerationResult> generationFuture;
     private final CompletableFuture<MtpCalibrationResult> mtpCalibrationFuture;
     private final MtpCalibrationRequest mtpCalibrationRequest;
     private volatile boolean cancelled = false;
@@ -42,7 +44,7 @@ public class InferenceTask {
                          int taskPriority,
                          boolean taskPreemptible,
                          Consumer<String> streamCallback) {
-        this(taskType, lane, messages, samplerConfig, null, maxTokens, taskPriority, taskPreemptible, streamCallback);
+        this(taskType, lane, messages, samplerConfig, null, maxTokens, taskPriority, taskPreemptible, streamCallback, null);
     }
 
     public InferenceTask(TaskType taskType,
@@ -57,6 +59,19 @@ public class InferenceTask {
         this(taskType, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, null);
     }
 
+    public InferenceTask(TaskType taskType,
+                         InferenceLane lane,
+                         List<LlamaCppChatMessage> messages,
+                         SamplerConfig samplerConfig,
+                         InferenceOptions inferenceOptions,
+                         int maxTokens,
+                         int taskPriority,
+                         boolean taskPreemptible,
+                         Consumer<String> streamCallback,
+                         Consumer<LlmStreamFinish> finishCallback) {
+        this(taskType, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, finishCallback, null);
+    }
+
     private InferenceTask(TaskType taskType,
                           InferenceLane lane,
                           List<LlamaCppChatMessage> messages,
@@ -66,6 +81,7 @@ public class InferenceTask {
                           int taskPriority,
                           boolean taskPreemptible,
                           Consumer<String> streamCallback,
+                          Consumer<LlmStreamFinish> finishCallback,
                           MtpCalibrationRequest mtpCalibrationRequest) {
         if (taskType == null) throw new IllegalArgumentException("taskType is required");
         if (lane == null) throw new IllegalArgumentException("lane is required");
@@ -79,7 +95,9 @@ public class InferenceTask {
         this.taskPriority = taskPriority;
         this.taskPreemptible = taskPreemptible;
         this.streamCallback = streamCallback;
+        this.finishCallback = finishCallback;
         this.syncFuture = new CompletableFuture<>();
+        this.generationFuture = new CompletableFuture<>();
         this.mtpCalibrationFuture = new CompletableFuture<>();
         this.mtpCalibrationRequest = mtpCalibrationRequest;
     }
@@ -110,7 +128,19 @@ public class InferenceTask {
                                        boolean taskPreemptible,
                                        Consumer<String> streamCallback,
                                        InferenceOptions inferenceOptions) {
-        return new InferenceTask(TaskType.STREAM_COMPLETION, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback);
+        return new InferenceTask(TaskType.STREAM_COMPLETION, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, null);
+    }
+
+    public static InferenceTask stream(InferenceLane lane,
+                                       List<LlamaCppChatMessage> messages,
+                                       SamplerConfig samplerConfig,
+                                       int maxTokens,
+                                       int taskPriority,
+                                       boolean taskPreemptible,
+                                       Consumer<String> streamCallback,
+                                       Consumer<LlmStreamFinish> finishCallback,
+                                       InferenceOptions inferenceOptions) {
+        return new InferenceTask(TaskType.STREAM_COMPLETION, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, finishCallback);
     }
 
     public static InferenceTask streamChat(List<LlamaCppChatMessage> messages,
@@ -151,7 +181,7 @@ public class InferenceTask {
                                          int taskPriority,
                                          boolean taskPreemptible,
                                          InferenceOptions inferenceOptions) {
-        return new InferenceTask(TaskType.SYNC_CHAT, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, null);
+        return new InferenceTask(TaskType.SYNC_CHAT, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, null, null);
     }
 
     public static InferenceTask syncCompress(List<LlamaCppChatMessage> messages,
@@ -177,7 +207,7 @@ public class InferenceTask {
                                              SamplerConfig samplerConfig,
                                              int maxTokens,
                                              InferenceOptions inferenceOptions) {
-        return new InferenceTask(TaskType.SYNC_TOOL_CALL, InferenceLane.TASK, messages, samplerConfig, inferenceOptions, maxTokens, 0, false, null);
+        return new InferenceTask(TaskType.SYNC_TOOL_CALL, InferenceLane.TASK, messages, samplerConfig, inferenceOptions, maxTokens, 0, false, null, null);
     }
 
     public static InferenceTask mtpCalibration(MtpCalibrationRequest request) {
@@ -195,6 +225,7 @@ public class InferenceTask {
                 0,
                 false,
                 null,
+                null,
                 effectiveRequest
         );
     }
@@ -209,7 +240,9 @@ public class InferenceTask {
     public int getTaskPriority() { return taskPriority; }
     public boolean isTaskPreemptible() { return taskPreemptible; }
     public Consumer<String> getStreamCallback() { return streamCallback; }
+    public Consumer<LlmStreamFinish> getFinishCallback() { return finishCallback; }
     public CompletableFuture<String> getSyncFuture() { return syncFuture; }
+    public CompletableFuture<LlmGenerationResult> getGenerationFuture() { return generationFuture; }
     public CompletableFuture<MtpCalibrationResult> getMtpCalibrationFuture() { return mtpCalibrationFuture; }
     public MtpCalibrationRequest getMtpCalibrationRequest() { return mtpCalibrationRequest; }
     public boolean isCancelled() { return cancelled; }

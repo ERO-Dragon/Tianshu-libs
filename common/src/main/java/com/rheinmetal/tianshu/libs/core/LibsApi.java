@@ -6,6 +6,8 @@ import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.InferenceOptions;
 import com.rheinmetal.tianshu.libs.llm.InferenceTask;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
+import com.rheinmetal.tianshu.libs.llm.LlmGenerationResult;
+import com.rheinmetal.tianshu.libs.llm.LlmStreamFinish;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
 import com.rheinmetal.tianshu.libs.llm.MtpCapability;
@@ -89,6 +91,14 @@ public class LibsApi {
         return doSyncChat(InferenceLane.CHAT, messages, sampler, maxTokens, options);
     }
 
+    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+        return chatWithUsage(messages, sampler, maxTokens, null);
+    }
+
+    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+        return doSyncChatWithUsage(InferenceLane.CHAT, messages, sampler, maxTokens, options);
+    }
+
     public void chatStream(List<ChatMessage> messages, Consumer<String> onToken) throws Exception {
         chatStream(messages, null, onToken);
     }
@@ -107,6 +117,21 @@ public class LibsApi {
                            InferenceOptions options,
                            Consumer<String> onToken) throws Exception {
         StreamResult result = doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, options, onToken);
+        try {
+            result.future.get(requestTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            chatEngine.cancelTask(result.task);
+            throw new Exception("Request timeout after " + requestTimeoutSeconds + " seconds");
+        }
+    }
+
+    public void chatStream(List<ChatMessage> messages,
+                           SamplerConfig sampler,
+                           int maxTokens,
+                           InferenceOptions options,
+                           Consumer<String> onToken,
+                           Consumer<LlmStreamFinish> onFinish) throws Exception {
+        StreamResult result = doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, options, onToken, onFinish);
         try {
             result.future.get(requestTimeoutSeconds, TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
@@ -136,6 +161,15 @@ public class LibsApi {
         return doAsyncChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options);
     }
 
+    public CompletableFuture<LlmGenerationResult> taskWithUsage(List<ChatMessage> messages,
+                                                                SamplerConfig sampler,
+                                                                int maxTokens,
+                                                                int priority,
+                                                                boolean preemptible,
+                                                                InferenceOptions options) {
+        return doAsyncChatWithUsage(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options);
+    }
+
     public CompletableFuture<String> taskStream(List<ChatMessage> messages,
                                            SamplerConfig sampler,
                                            int maxTokens,
@@ -153,6 +187,22 @@ public class LibsApi {
                                                 InferenceOptions options,
                                                 Consumer<String> tokenConsumer) {
         return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer).future;
+    }
+
+    public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
+                                                                      SamplerConfig sampler,
+                                                                      int maxTokens,
+                                                                      int priority,
+                                                                      boolean preemptible,
+                                                                      InferenceOptions options,
+                                                                      Consumer<String> tokenConsumer,
+                                                                      Consumer<LlmStreamFinish> finishConsumer) {
+        return doStreamChatWithUsage(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+    }
+
+    public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler) {
+        List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
+        return chatEngine.countChatPromptTokens(llamaMessages, sampler);
     }
 
     public boolean supportsMtp() {
@@ -267,6 +317,10 @@ public class LibsApi {
     }
 
     private String doSyncChat(InferenceLane lane, List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+        return doSyncChatWithUsage(lane, messages, sampler, maxTokens, options).text();
+    }
+
+    private LlmGenerationResult doSyncChatWithUsage(InferenceLane lane, List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
         validateMaxTokens(maxTokens);
         if (!chatEngine.hasQueueCapacity(lane)) {
             throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
@@ -275,7 +329,7 @@ public class LibsApi {
         InferenceTask task = InferenceTask.syncChat(lane, llamaMessages, sampler, maxTokens, 0, false, options);
         chatEngine.submitTask(task);
         try {
-            return task.getSyncFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS);
+            return task.getGenerationFuture().get(requestTimeoutSeconds, TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
             chatEngine.cancelTask(task);
             throw new Exception("Request timeout after " + requestTimeoutSeconds + " seconds");
@@ -290,6 +344,18 @@ public class LibsApi {
                                                     boolean preemptible,
                                                     InferenceOptions options,
                                                     Consumer<String> tokenConsumer) {
+        return doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, null);
+    }
+
+    private StreamResult doStreamChat(InferenceLane lane,
+                                                    List<ChatMessage> messages,
+                                                    SamplerConfig sampler,
+                                                    int maxTokens,
+                                                    int priority,
+                                                    boolean preemptible,
+                                                    InferenceOptions options,
+                                                    Consumer<String> tokenConsumer,
+                                                    Consumer<LlmStreamFinish> finishConsumer) {
         try {
             validateMaxTokens(maxTokens);
             if (tokenConsumer == null) {
@@ -299,7 +365,7 @@ public class LibsApi {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
-            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer, options);
+            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer, finishConsumer, options);
             chatEngine.submitTask(task);
             return new StreamResult(task, cancellableFuture(task));
         } catch (Exception e) {
@@ -316,6 +382,30 @@ public class LibsApi {
                                                    int priority,
                                                    boolean preemptible,
                                                    InferenceOptions options) {
+        CompletableFuture<LlmGenerationResult> resultFuture = doAsyncChatWithUsage(lane, messages, sampler, maxTokens, priority, preemptible, options);
+        CompletableFuture<String> textFuture = new CompletableFuture<>();
+        resultFuture.whenComplete((result, error) -> {
+            if (error != null) {
+                textFuture.completeExceptionally(error);
+            } else {
+                textFuture.complete(result.text());
+            }
+        });
+        textFuture.whenComplete((result, error) -> {
+            if (textFuture.isCancelled()) {
+                resultFuture.cancel(false);
+            }
+        });
+        return textFuture;
+    }
+
+    private CompletableFuture<LlmGenerationResult> doAsyncChatWithUsage(InferenceLane lane,
+                                                                        List<ChatMessage> messages,
+                                                                        SamplerConfig sampler,
+                                                                        int maxTokens,
+                                                                        int priority,
+                                                                        boolean preemptible,
+                                                                        InferenceOptions options) {
         try {
             validateMaxTokens(maxTokens);
             if (!chatEngine.hasQueueCapacity(lane)) {
@@ -324,12 +414,36 @@ public class LibsApi {
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
             InferenceTask task = InferenceTask.syncChat(lane, llamaMessages, sampler, maxTokens, priority, preemptible, options);
             chatEngine.submitTask(task);
-            return cancellableFuture(task);
+            return cancellableGenerationFuture(task);
         } catch (Exception e) {
-            CompletableFuture<String> failed = new CompletableFuture<>();
+            CompletableFuture<LlmGenerationResult> failed = new CompletableFuture<>();
             failed.completeExceptionally(e);
             return failed;
         }
+    }
+
+    private CompletableFuture<LlmGenerationResult> doStreamChatWithUsage(InferenceLane lane,
+                                                                         List<ChatMessage> messages,
+                                                                         SamplerConfig sampler,
+                                                                         int maxTokens,
+                                                                         int priority,
+                                                                         boolean preemptible,
+                                                                         InferenceOptions options,
+                                                                         Consumer<String> tokenConsumer,
+                                                                         Consumer<LlmStreamFinish> finishConsumer) {
+        StreamResult stream = doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+        if (stream.task == null) {
+            CompletableFuture<LlmGenerationResult> failed = new CompletableFuture<>();
+            stream.future.whenComplete((result, error) -> {
+                if (error != null) {
+                    failed.completeExceptionally(error);
+                } else {
+                    failed.completeExceptionally(new IllegalStateException("Stream task was not created"));
+                }
+            });
+            return failed;
+        }
+        return cancellableGenerationFuture(stream.task);
     }
 
     private CompletableFuture<String> cancellableFuture(InferenceTask task) {
@@ -343,6 +457,23 @@ public class LibsApi {
         });
         exposed.whenComplete((result, error) -> {
             if (exposed.isCancelled() && !task.getSyncFuture().isDone()) {
+                chatEngine.cancelTask(task);
+            }
+        });
+        return exposed;
+    }
+
+    private CompletableFuture<LlmGenerationResult> cancellableGenerationFuture(InferenceTask task) {
+        CompletableFuture<LlmGenerationResult> exposed = new CompletableFuture<>();
+        task.getGenerationFuture().whenComplete((result, error) -> {
+            if (error != null) {
+                exposed.completeExceptionally(error);
+            } else {
+                exposed.complete(result);
+            }
+        });
+        exposed.whenComplete((result, error) -> {
+            if (exposed.isCancelled() && !task.getGenerationFuture().isDone()) {
                 chatEngine.cancelTask(task);
             }
         });

@@ -2,12 +2,10 @@ package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.*;
 import org.argeo.jjml.llm.params.DefaultSamplerChainParams;
-import org.argeo.jjml.llm.util.ThinkingMode;
 
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -62,16 +60,20 @@ public class TaskExecutor implements Runnable {
                 if (!engine.isRunning()) {
                     task.cancel();
                     task.getSyncFuture().cancel(false);
+                    task.getGenerationFuture().cancel(false);
                     task.getMtpCalibrationFuture().cancel(false);
                     closeSuspendedTask(task);
+                    publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled because engine stopped.");
                     engine.finishTask(task);
                     break;
                 }
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
+                    task.getGenerationFuture().cancel(false);
                     task.getMtpCalibrationFuture().cancel(false);
                     closeSuspendedTask(task);
+                    publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled before execution.");
                     engine.finishTask(task);
                     continue;
@@ -149,7 +151,9 @@ public class TaskExecutor implements Runnable {
             cancelled.add(entry.getKey());
             entry.getValue().close();
             entry.getKey().getSyncFuture().cancel(false);
+            entry.getKey().getGenerationFuture().cancel(false);
             entry.getKey().getMtpCalibrationFuture().cancel(false);
+            publishStreamFinish(entry.getKey(), StreamFinishType.CANCELLED, entry.getValue().usage(), null);
             engine.publishInferenceEvent(entry.getKey(), InferenceEventType.CANCELLED, "Task was cancelled while suspended.");
             engine.finishTask(entry.getKey());
         }
@@ -171,7 +175,9 @@ public class TaskExecutor implements Runnable {
         try {
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
+                task.getGenerationFuture().cancel(false);
                 task.getMtpCalibrationFuture().cancel(false);
+                publishStreamFinish(task, StreamFinishType.CANCELLED, new LlmTokenUsage(0, 0), null);
                 engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
@@ -193,7 +199,9 @@ public class TaskExecutor implements Runnable {
             System.err.println("[TaskExecutor] Task " + task.getTaskId() + " failed: " + e.getMessage());
             e.printStackTrace();
             task.getSyncFuture().completeExceptionally(e);
+            task.getGenerationFuture().completeExceptionally(e);
             task.getMtpCalibrationFuture().completeExceptionally(e);
+            publishStreamFinish(task, StreamFinishType.FAILED, new LlmTokenUsage(0, 0), e);
             engine.publishInferenceEvent(task, InferenceEventType.FAILED, "Inference failed: " + e.getMessage(), e);
             if (findSuspendedTask(task) != null) {
                 closeSuspendedTask(task);
@@ -240,7 +248,8 @@ public class TaskExecutor implements Runnable {
         try {
             engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Chat inference started.");
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_STARTED, "Chat prefill started.");
-            generator = createTokenGenerator(task, promptSnapshot(task));
+            PromptSnapshot prompt = promptSnapshot(task);
+            generator = createTokenGenerator(task, prompt);
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_COMPLETED, "Chat prefill completed.");
             engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Chat generation started.");
 
@@ -248,28 +257,35 @@ public class TaskExecutor implements Runnable {
             ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
             Consumer<String> callback = task.getStreamCallback();
             int generatedTokens = 0;
+            int completionTokens = 0;
             while (task.getMaxTokens() <= 0 || generatedTokens < task.getMaxTokens()) {
                 if (task.isCancelled()) break;
                 int remaining = task.getMaxTokens() <= 0 ? Integer.MAX_VALUE : task.getMaxTokens() - generatedTokens;
                 GeneratedToken generated = generator.next(remaining);
                 if (generated == null) break;
                 generatedTokens++;
-                String normalizedToken = reasoningNormalizer.accept(generated.text());
+                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(generated.text());
+                String normalizedToken = accepted.text();
+                if (accepted.visibleCompletion()) completionTokens++;
                 fullResponse.append(normalizedToken);
                 if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
             }
-            String normalizedRemainder = reasoningNormalizer.finish();
+            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
+            String normalizedRemainder = remainder.text();
             fullResponse.append(normalizedRemainder);
             if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
 
+            LlmTokenUsage usage = new LlmTokenUsage(prompt.tokenIds().length, completionTokens);
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
+                task.getGenerationFuture().cancel(false);
+                publishStreamFinish(task, StreamFinishType.CANCELLED, usage, null);
                 engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Chat inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
             recordMtpStats(generator);
-            task.getSyncFuture().complete(fullResponse.toString());
+            completeGeneration(task, fullResponse.toString(), usage);
             engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Chat inference completed.", 0, generatedTokens, null);
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
@@ -337,8 +353,10 @@ public class TaskExecutor implements Runnable {
             while (task.getMaxTokens() <= 0 || state.generatedTokens < task.getMaxTokens()) {
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
+                    task.getGenerationFuture().cancel(false);
                     task.getMtpCalibrationFuture().cancel(false);
                     clearSuspendedTask(task);
+                    publishStreamFinish(task, StreamFinishType.CANCELLED, state.usage(), null);
                     state.close();
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Task inference was cancelled.", state.replayCharacters(), state.generatedTokens, null);
                     engine.finishTask(task);
@@ -350,7 +368,9 @@ public class TaskExecutor implements Runnable {
                 state.generatedTokens++;
                 state.generatedTokenIds.add(token.id());
                 state.rawGeneratedText.append(token.text());
-                String normalizedToken = reasoningNormalizer.accept(token.text());
+                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(token.text());
+                String normalizedToken = accepted.text();
+                if (accepted.visibleCompletion()) state.completionTokens++;
                 state.generatedText.append(normalizedToken);
                 if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
                 if (engine.shouldSuspendTaskLane(task)) {
@@ -359,11 +379,12 @@ public class TaskExecutor implements Runnable {
                 }
                 state.captureCheckpointIfDue(STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS);
             }
-            String normalizedRemainder = reasoningNormalizer.finish();
+            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
+            String normalizedRemainder = remainder.text();
             state.generatedText.append(normalizedRemainder);
             if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
 
-            task.getSyncFuture().complete(state.generatedText.toString());
+            completeGeneration(task, state.generatedText.toString(), state.usage());
             recordMtpStats(state.generator);
             clearSuspendedTask(task);
             state.close();
@@ -713,11 +734,7 @@ public class TaskExecutor implements Runnable {
                 new LlamaCppChatMessage("system", MTP_CALIBRATION_SYSTEM_PROMPT),
                 new LlamaCppChatMessage("user", userContent)
         );
-        SamplerConfig config = task.getSamplerConfig();
-        ChatTemplateOptions options = chatTemplateOptions(config);
-        return options.kwargs().isEmpty()
-                ? engine.getModel().formatChatMessages(messages, options.thinkingMode())
-                : engine.getModel().formatChatMessagesJinja(messages, true, options.thinkingMode(), options.kwargs());
+        return engine.promptSnapshot(messages, task.getSamplerConfig()).text();
     }
 
     private int countPromptTokens(String formattedPrompt) {
@@ -733,68 +750,33 @@ public class TaskExecutor implements Runnable {
     private void cancelMtpCalibration(InferenceTask task) {
         task.getMtpCalibrationFuture().cancel(false);
         task.getSyncFuture().cancel(false);
+        task.getGenerationFuture().cancel(false);
         engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "MTP calibration was cancelled.");
         engine.finishTask(task);
     }
 
-    private String formatMessages(InferenceTask task) {
-        SamplerConfig config = task.getSamplerConfig();
-        ChatTemplateOptions options = chatTemplateOptions(config);
-
-        return options.kwargs().isEmpty()
-                ? engine.getModel().formatChatMessages(task.getMessages(), options.thinkingMode())
-                : engine.getModel().formatChatMessagesJinja(task.getMessages(), true, options.thinkingMode(), options.kwargs());
-    }
-
     private PromptSnapshot promptSnapshot(InferenceTask task) {
-        String formattedPrompt = formatMessages(task);
-        return new PromptSnapshot(formattedPrompt, tokenizePrompt(formattedPrompt));
+        return engine.promptSnapshot(task.getMessages(), task.getSamplerConfig());
     }
 
     private int[] tokenizePrompt(String formattedPrompt) {
-        return TokenIds.copyRemaining(engine.getModel().getVocabulary().tokenize(formattedPrompt));
+        return ChatPromptTemplate.tokenize(engine.getModel(), formattedPrompt);
     }
 
-    private ChatTemplateOptions chatTemplateOptions(SamplerConfig config) {
-        ThinkingMode thinkingMode = config.effectiveThinkingMode();
-        Map<String, String> kwargs = config.chatTemplateKwargs();
-        if (kwargs.isEmpty()) return new ChatTemplateOptions(thinkingMode, kwargs);
+    private void completeGeneration(InferenceTask task, String text, LlmTokenUsage usage) {
+        LlmGenerationResult result = new LlmGenerationResult(text, usage);
+        task.getSyncFuture().complete(text);
+        task.getGenerationFuture().complete(result);
+        publishStreamFinish(task, StreamFinishType.COMPLETED, usage, null);
+    }
 
-        Map<String, String> normalized = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : kwargs.entrySet()) {
-            String key = entry.getKey();
-            String value = entry.getValue();
-            if (key == null || key.isBlank()) {
-                throw new IllegalArgumentException("chatTemplateKwargs contains a blank key");
-            }
-            if (value == null) {
-                throw new IllegalArgumentException("chatTemplateKwargs value for '" + key + "' cannot be null");
-            }
-            String normalizedKey = key.trim();
-            if ("enable_thinking".equals(normalizedKey)) {
-                boolean kwargThinking = parseBooleanKwarg(normalizedKey, value);
-                ThinkingMode kwargMode = kwargThinking ? ThinkingMode.ENABLED : ThinkingMode.DISABLED;
-                if (thinkingMode == ThinkingMode.AUTO) {
-                    thinkingMode = kwargMode;
-                } else if (thinkingMode != kwargMode) {
-                    throw new IllegalArgumentException("Conflicting thinking settings: thinkingMode="
-                            + thinkingMode + " but chatTemplateKwargs.enable_thinking=" + value);
-                }
-                continue;
-            }
-            normalized.put(normalizedKey, value);
+    private void publishStreamFinish(InferenceTask task, StreamFinishType type, LlmTokenUsage usage, Throwable error) {
+        Consumer<LlmStreamFinish> callback = task.getFinishCallback();
+        if (callback == null) return;
+        try {
+            callback.accept(new LlmStreamFinish(type, usage, error));
+        } catch (Exception ignored) {
         }
-        return new ChatTemplateOptions(thinkingMode, normalized);
-    }
-
-    private boolean parseBooleanKwarg(String key, String value) {
-        String normalized = value.trim().toLowerCase();
-        if ("true".equals(normalized)) return true;
-        if ("false".equals(normalized)) return false;
-        throw new IllegalArgumentException("chatTemplateKwargs." + key + " must be 'true' or 'false', got '" + value + "'");
-    }
-
-    private record ChatTemplateOptions(ThinkingMode thinkingMode, Map<String, String> kwargs) {
     }
 
     private void clearSuspendedTask(InferenceTask task) {
@@ -812,8 +794,10 @@ public class TaskExecutor implements Runnable {
         for (SuspendedTask suspended : coldTasks.values()) {
             suspended.task.cancel();
             suspended.task.getSyncFuture().cancel(false);
+            suspended.task.getGenerationFuture().cancel(false);
             suspended.task.getMtpCalibrationFuture().cancel(false);
             suspended.close();
+            publishStreamFinish(suspended.task, StreamFinishType.CANCELLED, suspended.usage(), null);
             engine.publishInferenceEvent(suspended.task, InferenceEventType.CANCELLED, "Task was cancelled during shutdown.");
             engine.finishTask(suspended.task);
         }
@@ -840,6 +824,7 @@ public class TaskExecutor implements Runnable {
         private InferenceTokenGenerator generator;
         private GenerationCheckpoint checkpoint;
         private int generatedTokens;
+        private int completionTokens;
         private int checkpointedTokens;
 
         private SuspendedTask(InferenceTask task) {
@@ -889,6 +874,11 @@ public class TaskExecutor implements Runnable {
         private int replayCharacters() {
             int promptLength = prompt == null ? 0 : prompt.textLength();
             return promptLength + rawGeneratedText.length();
+        }
+
+        private LlmTokenUsage usage() {
+            int promptTokenCount = prompt == null ? 0 : prompt.tokenIds().length;
+            return new LlmTokenUsage(promptTokenCount, completionTokens);
         }
     }
 }

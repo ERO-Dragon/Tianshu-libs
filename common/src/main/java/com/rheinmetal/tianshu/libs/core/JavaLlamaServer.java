@@ -10,6 +10,8 @@ import com.rheinmetal.tianshu.libs.llm.InferenceOptions;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
 import com.rheinmetal.tianshu.libs.llm.LaneConfig;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
+import com.rheinmetal.tianshu.libs.llm.LlmGenerationResult;
+import com.rheinmetal.tianshu.libs.llm.LlmStreamFinish;
 import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
@@ -145,6 +147,14 @@ public class JavaLlamaServer {
         return requireLibsApi().chat(messages, sampler, maxTokens, options);
     }
 
+    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens) throws Exception {
+        return requireLibsApi().chatWithUsage(messages, sampler, maxTokens);
+    }
+
+    public LlmGenerationResult chatWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options) throws Exception {
+        return requireLibsApi().chatWithUsage(messages, sampler, maxTokens, options);
+    }
+
     public void chatStream(String message, String systemPrompt, Consumer<String> onToken) throws Exception {
         chatStream(toMessages(message, systemPrompt), null, onToken);
     }
@@ -173,6 +183,15 @@ public class JavaLlamaServer {
         requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken);
     }
 
+    public void chatStream(List<ChatMessage> messages,
+                           SamplerConfig sampler,
+                           int maxTokens,
+                           InferenceOptions options,
+                           Consumer<String> onToken,
+                           Consumer<LlmStreamFinish> onFinish) throws Exception {
+        requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken, onFinish);
+    }
+
     public CompletableFuture<String> task(List<ChatMessage> messages,
                                                 SamplerConfig sampler,
                                                 int maxTokens,
@@ -188,6 +207,15 @@ public class JavaLlamaServer {
                                           boolean preemptible,
                                           InferenceOptions options) {
         return requireLibsApi().task(messages, sampler, maxTokens, priority, preemptible, options);
+    }
+
+    public CompletableFuture<LlmGenerationResult> taskWithUsage(List<ChatMessage> messages,
+                                                                SamplerConfig sampler,
+                                                                int maxTokens,
+                                                                int priority,
+                                                                boolean preemptible,
+                                                                InferenceOptions options) {
+        return requireLibsApi().taskWithUsage(messages, sampler, maxTokens, priority, preemptible, options);
     }
 
     public CompletableFuture<String> taskStream(List<ChatMessage> messages,
@@ -207,6 +235,21 @@ public class JavaLlamaServer {
                                                 InferenceOptions options,
                                                 Consumer<String> tokenConsumer) {
         return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer);
+    }
+
+    public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
+                                                                      SamplerConfig sampler,
+                                                                      int maxTokens,
+                                                                      int priority,
+                                                                      boolean preemptible,
+                                                                      InferenceOptions options,
+                                                                      Consumer<String> tokenConsumer,
+                                                                      Consumer<LlmStreamFinish> finishConsumer) {
+        return requireLibsApi().taskStreamWithUsage(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+    }
+
+    public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler) {
+        return requireLibsApi().countChatPromptTokens(messages, sampler);
     }
 
     public float[] embed(String text) throws Exception {

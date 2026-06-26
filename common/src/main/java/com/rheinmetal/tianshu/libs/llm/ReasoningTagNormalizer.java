@@ -28,12 +28,20 @@ final class ReasoningTagNormalizer {
     private boolean inIgnoredBlock;
 
     String accept(String token) {
-        if (token == null || token.isEmpty()) return "";
+        return acceptWithUsage(token).text();
+    }
+
+    AcceptResult acceptWithUsage(String token) {
+        if (token == null || token.isEmpty()) return new AcceptResult("", false);
         pending.append(token);
         return drain(false);
     }
 
     String finish() {
+        return finishWithUsage().text();
+    }
+
+    AcceptResult finishWithUsage() {
         return drain(true);
     }
 
@@ -42,12 +50,13 @@ final class ReasoningTagNormalizer {
         return normalizer.accept(text) + normalizer.finish();
     }
 
-    private String drain(boolean finishing) {
+    private AcceptResult drain(boolean finishing) {
         StringBuilder out = new StringBuilder();
+        boolean[] visibleCompletion = new boolean[] { false };
         while (pending.length() > 0) {
             Match match = findNextMatch();
             if (match != null) {
-                emitTextBeforeMatch(out, match.index);
+                emitTextBeforeMatch(out, match.index, visibleCompletion);
                 pending.delete(0, match.alias.raw.length());
                 switch (match.kind) {
                     case REASONING_OPEN -> beginReasoning(out);
@@ -63,29 +72,30 @@ final class ReasoningTagNormalizer {
             int keepLength = finishing ? 0 : longestAliasPrefixSuffixLength();
             int safeLength = pending.length() - keepLength;
             if (safeLength <= 0) break;
-            emitText(out, pending.substring(0, safeLength));
+            emitText(out, pending.substring(0, safeLength), visibleCompletion);
             pending.delete(0, safeLength);
         }
 
         if (finishing && inReasoning) {
             emitReasoningBlock(out);
         }
-        return out.toString();
+        return new AcceptResult(out.toString(), visibleCompletion[0]);
     }
 
-    private void emitTextBeforeMatch(StringBuilder out, int length) {
+    private void emitTextBeforeMatch(StringBuilder out, int length, boolean[] visibleCompletion) {
         if (length <= 0) return;
-        emitText(out, pending.substring(0, length));
+        emitText(out, pending.substring(0, length), visibleCompletion);
         pending.delete(0, length);
     }
 
-    private void emitText(StringBuilder out, String text) {
+    private void emitText(StringBuilder out, String text, boolean[] visibleCompletion) {
         if (inReasoning) {
             emitReasoningText(out, text);
         } else if (inIgnoredBlock) {
             return;
         } else {
             out.append(text);
+            if (!text.isEmpty()) visibleCompletion[0] = true;
         }
     }
 
@@ -314,5 +324,8 @@ final class ReasoningTagNormalizer {
     }
 
     private record Match(int index, TagAlias alias, MatchKind kind) {
+    }
+
+    record AcceptResult(String text, boolean visibleCompletion) {
     }
 }
