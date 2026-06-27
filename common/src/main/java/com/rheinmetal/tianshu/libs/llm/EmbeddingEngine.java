@@ -5,7 +5,6 @@ import org.argeo.jjml.llm.LlamaCppEmbeddingProcessor;
 import org.argeo.jjml.llm.LlamaCppModel;
 import org.argeo.jjml.llm.params.ContextParam;
 import org.argeo.jjml.llm.params.ModelParam;
-import org.argeo.jjml.llm.params.PoolingType;
 
 import com.rheinmetal.tianshu.libs.nativelib.NativeLibraryLoader;
 
@@ -92,8 +91,7 @@ public class EmbeddingEngine {
         var ctxParams = LlamaCppContext.defaultContextParams()
                 .with(ContextParam.n_ctx, contextSize)
                 .with(ContextParam.n_threads, threadCount)
-                .with(ContextParam.embeddings, true)
-                .with(ContextParam.pooling_type, PoolingType.LLAMA_POOLING_TYPE_MEAN);
+                .with(ContextParam.embeddings, true);
         return new LlamaCppContext(model, ctxParams);
     }
 

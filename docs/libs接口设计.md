@@ -7,6 +7,7 @@ libs 只提供底层基础能力，不包含业务逻辑。
 | 能力 | 说明 |
 |------|------|
 | 推理 | chat / chatStream / task / taskStream |
+| token / usage | countChatPromptTokens / LlmTokenUsage |
 | 向量 | embed(text) / embed(texts) |
 | 检索 | search(queryText, texts, topK, threshold) |
 | 调度 | CHAT 优先，可暂停 TASK |
@@ -90,15 +91,25 @@ CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig s
 CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken);
 CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken, Consumer<LlmStreamFinish> onFinish);
 
-// 后台任务（可被 chat 暂停）- 同步返回
-CompletableFuture<String> task(List<ChatMessage> messages);
+// 请求前 token 预算查询；使用当前 LLM 的 chat template + tokenizer
+int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler);
+
+// 后台任务（可被 chat 暂停）- 非流式返回
 CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible);
 CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options);
+CompletableFuture<LlmGenerationResult> taskWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options);
 
 // 后台任务 - 流式返回
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, Consumer<String> tokenConsumer);
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer);
+CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<LlmStreamFinish> finishConsumer);
 ```
+
+所有 `chat` / `chatStream` / `task` / `taskStream` 返回的 `CompletableFuture` 都是本次请求的控制句柄：
+
+- 成功时 future 返回完整文本，`WithUsage` 变体返回 `LlmGenerationResult`。
+- 调用 `future.cancel(false)` 会取消对应请求；流式请求会通过 `LlmStreamFinish` 返回 `CANCELLED` 和已知 usage。
+- `chat` 不会抢占另一个正在执行的 `chat`；新的 CHAT 请求仍按 CHAT 队列排序执行。
 
 ### 2.1.1 推理状态事件
 
@@ -142,13 +153,14 @@ public enum InferenceEventType {
 
 ### 2.1.2 推理输出归一化（内部行为）
 
-libs 不新增或改变上述调用方法；所有归一化都发生在内部 token 输出边界，对 `chat` / `chatStream` / `task` / `taskStream` 统一生效。
+所有归一化都发生在内部 token 输出边界，对 `chat` / `chatStream` / `task` / `taskStream` 统一生效。
 
 - 不同开源模型可能使用不同的思考包裹格式，例如 `<think>`、`<reasoning>`、`<thought>`、`<analysis>`、`<|begin_of_thought|>` 等。
 - libs 会把已知思考包裹统一归一化为 `<think>...</think>` 后返回，便于上层只处理一种格式。
 - 空思考块会被清洗掉，例如 `<think></think>`、`<think>\n\n</think>` 或 no-think 标记块，不再返回给上层。
 - 流式输出不会缓冲完整思考段。内部只暂存可能组成标签的短尾部，以及开标签后的空白前缀；一旦出现非空思考内容，会立即流式输出规范化后的 `<think>` 和后续内容。
 - `enableThinking` / `ThinkingMode` 仍然只是生成前的模板控制；输出归一化是生成后的统一兼容层，二者互不改变对外 API。
+- `LlmTokenUsage.completionTokens` 只统计归一化后可见回答 token；被识别为思考包裹内的 token 不计入 completion。
 
 ### 2.1.3 请求级运行选项
 
@@ -298,10 +310,14 @@ public class SamplerConfig {
     public Boolean enableThinking; // 最省事入口：true 开启，false 关闭，null 自动
     public ThinkingMode thinkingMode; // AUTO / ENABLED / DISABLED
     public Map<String, String> chatTemplateKwargs; // 额外 Jinja 模板参数
+    public String grammarStr;      // 可选：GBNF grammar
+    public String grammarRoot;     // 默认 root
 
+    public static SamplerConfig defaults();
     public void setEnableThinking(Boolean enableThinking);
     public ThinkingMode getEffectiveThinkingMode();
     public SamplerConfig chatTemplateKwarg(String key, String value);
+    public SamplerConfig withKwargs(String key, String value);
     public SamplerConfig copy();
 }
 ```
@@ -336,7 +352,35 @@ public class RagSearchResult {
 }
 ```
 
-### 3.4 FlashAttentionMode 与 KvCacheType
+### 3.4 LLM usage 相关结构
+
+```java
+public record LlmTokenUsage(int promptTokens, int completionTokens) {
+    public int totalTokens(); // promptTokens + completionTokens
+}
+
+public record LlmGenerationResult(String text, LlmTokenUsage usage) {
+}
+
+public record LlmStreamFinish(StreamFinishType type, LlmTokenUsage usage, Throwable error) {
+}
+
+public enum StreamFinishType {
+    COMPLETED,
+    CANCELLED,
+    FAILED
+}
+```
+
+说明：
+
+- `promptTokens`：实际 chat template 渲染后的 prompt token 数。
+- `completionTokens`：模型实际生成且归一化后对上层可见的回答 token 数；识别出的 COT token 不计入。
+- `totalTokens()`：`promptTokens + completionTokens`。
+- 非流式 `chatWithUsage` / `taskWithUsage` 成功完成时通过 `LlmGenerationResult` 返回 usage。
+- 流式请求通过 `LlmStreamFinish` 返回终态和 usage；取消时 future 进入取消态，finish type 为 `CANCELLED`。
+
+### 3.5 FlashAttentionMode 与 KvCacheType
 
 ```java
 public enum FlashAttentionMode {
@@ -357,7 +401,7 @@ public enum KvCacheType {
 - `KvCacheType` 是 KV cache 量化配置，通过 `cacheTypeK(...)` 和 `cacheTypeV(...)` 设置；不设置时保留 JJML 默认值。
 - 这两类参数都会影响 context 创建方式和显存/性能特征，因此不放入 `InferenceOptions`，也不建议在单轮对话级别频繁切换。
 
-### 3.5 InferenceOptions
+### 3.6 InferenceOptions
 
 ```java
 public final class InferenceOptions {
@@ -373,7 +417,7 @@ public final class InferenceOptions {
 
 `InferenceOptions` 是不可变对象，提交任务时会复制快照。上层可以安全复用模板对象，也可以为每轮对话临时构建。
 
-### 3.6 MTP 相关结构
+### 3.7 MTP 相关结构
 
 ```java
 public final class MtpCapability {
@@ -393,8 +437,11 @@ public final class MtpCalibrationRequest {
 
 public final class MtpCalibrationResult {
     public boolean isSupported();
+    public int getMtpLayerCount();
+    public int getMaxDraftMaxTested();
     public boolean hasBestTrial();
     public int getBestDraftMax();
+    public MtpTrialResult getBestTrial();
     public List<MtpTrialResult> getTrials();
     public String getMessage();
 }
