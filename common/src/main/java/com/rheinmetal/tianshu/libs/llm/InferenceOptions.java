@@ -11,11 +11,13 @@ public final class InferenceOptions {
     private final boolean mtpEnabled;
     private final Integer mtpDraftMax;
     private final Float vulkanPriority;
+    private final boolean captureThinkingContent;
 
     private InferenceOptions(Builder builder) {
         this.mtpEnabled = builder.mtpEnabled;
         this.mtpDraftMax = builder.mtpDraftMax;
         this.vulkanPriority = builder.vulkanPriority;
+        this.captureThinkingContent = builder.captureThinkingContent;
     }
 
     public static InferenceOptions defaults() {
@@ -35,6 +37,7 @@ public final class InferenceOptions {
                 .mtpEnabled(mtpEnabled)
                 .mtpDraftMax(mtpDraftMax)
                 .vulkanPriority(vulkanPriority)
+                .captureThinkingContent(captureThinkingContent)
                 .build();
     }
 
@@ -50,10 +53,15 @@ public final class InferenceOptions {
         return vulkanPriority;
     }
 
+    public boolean isCaptureThinkingContent() {
+        return captureThinkingContent;
+    }
+
     public static final class Builder {
         private boolean mtpEnabled;
         private Integer mtpDraftMax;
         private Float vulkanPriority;
+        private boolean captureThinkingContent;
 
         private Builder() {
         }
@@ -76,6 +84,11 @@ public final class InferenceOptions {
                 throw new IllegalArgumentException("vulkanPriority must be between 0.0 and 1.0");
             }
             this.vulkanPriority = value;
+            return this;
+        }
+
+        public Builder captureThinkingContent(boolean value) {
+            this.captureThinkingContent = value;
             return this;
         }
 

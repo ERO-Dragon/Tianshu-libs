@@ -2,6 +2,7 @@ package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppContextState;
+import org.argeo.jjml.llm.LlamaCppModel;
 import org.argeo.jjml.llm.LlamaCppSamplerChain;
 import org.argeo.jjml.llm.LlamaCppSpeculativeProcessor;
 import org.argeo.jjml.llm.LlamaCppVocabulary;
@@ -29,10 +30,29 @@ final class MtpTokenGenerator implements CheckpointableTokenGenerator {
                       LlamaCppSamplerChain samplerChain,
                       int[] promptTokens,
                       int draftMax) {
-        this(context, samplerChain, promptTokens, promptTokens.length, 0, null, draftMax);
+        this(context, null, samplerChain, promptTokens, promptTokens.length, 0, null, draftMax);
     }
 
     MtpTokenGenerator(LlamaCppContext context,
+                      LlamaCppModel draftModel,
+                      LlamaCppSamplerChain samplerChain,
+                      int[] promptTokens,
+                      int draftMax) {
+        this(context, draftModel, samplerChain, promptTokens, promptTokens.length, 0, null, draftMax);
+    }
+
+    MtpTokenGenerator(LlamaCppContext context,
+                      LlamaCppSamplerChain samplerChain,
+                      int[] tokenIds,
+                      int promptTokenCount,
+                      int generatedTokenCount,
+                      GenerationCheckpoint checkpoint,
+                      int draftMax) {
+        this(context, null, samplerChain, tokenIds, promptTokenCount, generatedTokenCount, checkpoint, draftMax);
+    }
+
+    MtpTokenGenerator(LlamaCppContext context,
+                      LlamaCppModel draftModel,
                       LlamaCppSamplerChain samplerChain,
                       int[] tokenIds,
                       int promptTokenCount,
@@ -48,7 +68,10 @@ final class MtpTokenGenerator implements CheckpointableTokenGenerator {
         this.promptTokenCount = promptTokenCount;
         this.generatedTokenCount = generatedTokenCount;
         this.stableGeneratedTokenCount = generatedTokenCount;
-        this.processor = new LlamaCppSpeculativeProcessor(context, samplerChain, SpeculativeParams.draftMtp(draftMax));
+        SpeculativeParams speculativeParams = SpeculativeParams.draftMtp(draftMax);
+        this.processor = draftModel == null
+                ? new LlamaCppSpeculativeProcessor(context, samplerChain, speculativeParams)
+                : new LlamaCppSpeculativeProcessor(context, draftModel, samplerChain, speculativeParams);
         if (checkpoint == null) {
             this.processor.begin(IntBuffer.wrap(tokenIds));
         } else {

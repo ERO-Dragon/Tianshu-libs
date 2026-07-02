@@ -25,7 +25,6 @@ public class ManualNoThinkChat {
                 .chatThreads(2)
                 .chatMaxQueueSize(4)
                 .taskThreads(2)
-                .taskSuspendOnChat(true)
                 .gpuLayers(999)
                 .requestTimeoutSeconds(300)
                 .build();

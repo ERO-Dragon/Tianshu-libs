@@ -152,6 +152,9 @@ tasks.register('manualProductionSmoke', JavaExec) {
     systemProperty 'tianshu.llm.taskMaxTokens', System.getProperty('tianshu.llm.taskMaxTokens', '240')
     systemProperty 'tianshu.llm.longPromptRepeats', System.getProperty('tianshu.llm.longPromptRepeats', '80')
     systemProperty 'tianshu.mtp.draftMax', System.getProperty('tianshu.mtp.draftMax', '1')
+    systemProperty 'tianshu.mtp.draftModel', System.getProperty('tianshu.mtp.draftModel', '')
+    systemProperty 'tianshu.llm.promptMarginTokens', System.getProperty('tianshu.llm.promptMarginTokens', '64')
+    systemProperty 'tianshu.llm.safetyMarginBytes', System.getProperty('tianshu.llm.safetyMarginBytes', "${512L * 1024L * 1024L}")
     systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
     systemProperty 'tianshu.embedding.device', System.getProperty('tianshu.embedding.device', '')
 }

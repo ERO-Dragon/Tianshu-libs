@@ -28,6 +28,7 @@ public class InferenceTask {
     private final int taskPriority;
     private final boolean taskPreemptible;
     private final Consumer<String> streamCallback;
+    private final Consumer<String> thinkingStreamCallback;
     private final Consumer<LlmStreamFinish> finishCallback;
     private final CompletableFuture<String> syncFuture;
     private final CompletableFuture<LlmGenerationResult> generationFuture;
@@ -69,7 +70,7 @@ public class InferenceTask {
                          boolean taskPreemptible,
                          Consumer<String> streamCallback,
                          Consumer<LlmStreamFinish> finishCallback) {
-        this(taskType, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, finishCallback, null);
+        this(taskType, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, null, finishCallback, null);
     }
 
     private InferenceTask(TaskType taskType,
@@ -81,6 +82,7 @@ public class InferenceTask {
                           int taskPriority,
                           boolean taskPreemptible,
                           Consumer<String> streamCallback,
+                          Consumer<String> thinkingStreamCallback,
                           Consumer<LlmStreamFinish> finishCallback,
                           MtpCalibrationRequest mtpCalibrationRequest) {
         if (taskType == null) throw new IllegalArgumentException("taskType is required");
@@ -96,6 +98,7 @@ public class InferenceTask {
         this.taskPriority = taskPriority;
         this.taskPreemptible = taskPreemptible;
         this.streamCallback = streamCallback;
+        this.thinkingStreamCallback = thinkingStreamCallback;
         this.finishCallback = finishCallback;
         this.syncFuture = new CompletableFuture<>();
         this.generationFuture = new CompletableFuture<>();
@@ -142,6 +145,19 @@ public class InferenceTask {
                                        Consumer<LlmStreamFinish> finishCallback,
                                        InferenceOptions inferenceOptions) {
         return new InferenceTask(TaskType.STREAM_COMPLETION, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, finishCallback);
+    }
+
+    public static InferenceTask stream(InferenceLane lane,
+                                       List<LlamaCppChatMessage> messages,
+                                       SamplerConfig samplerConfig,
+                                       int maxTokens,
+                                       int taskPriority,
+                                       boolean taskPreemptible,
+                                       Consumer<String> streamCallback,
+                                       Consumer<String> thinkingStreamCallback,
+                                       Consumer<LlmStreamFinish> finishCallback,
+                                       InferenceOptions inferenceOptions) {
+        return new InferenceTask(TaskType.STREAM_COMPLETION, lane, messages, samplerConfig, inferenceOptions, maxTokens, taskPriority, taskPreemptible, streamCallback, thinkingStreamCallback, finishCallback, null);
     }
 
     public static InferenceTask streamChat(List<LlamaCppChatMessage> messages,
@@ -227,6 +243,7 @@ public class InferenceTask {
                 false,
                 null,
                 null,
+                null,
                 effectiveRequest
         );
     }
@@ -241,6 +258,7 @@ public class InferenceTask {
     public int getTaskPriority() { return taskPriority; }
     public boolean isTaskPreemptible() { return taskPreemptible; }
     public Consumer<String> getStreamCallback() { return streamCallback; }
+    public Consumer<String> getThinkingStreamCallback() { return thinkingStreamCallback; }
     public Consumer<LlmStreamFinish> getFinishCallback() { return finishCallback; }
     public CompletableFuture<String> getSyncFuture() { return syncFuture; }
     public CompletableFuture<LlmGenerationResult> getGenerationFuture() { return generationFuture; }

@@ -23,16 +23,25 @@ final class ReasoningTagNormalizer {
     private static final List<TagAlias> IGNORE_SELF_ALIASES = buildIgnoreSelfAliases();
     private final StringBuilder pending = new StringBuilder();
     private final StringBuilder reasoningPrefixBuffer = new StringBuilder();
+    private final boolean captureThinkingContent;
     private boolean inReasoning;
     private boolean reasoningEmitted;
     private boolean inIgnoredBlock;
+
+    ReasoningTagNormalizer() {
+        this(false);
+    }
+
+    ReasoningTagNormalizer(boolean captureThinkingContent) {
+        this.captureThinkingContent = captureThinkingContent;
+    }
 
     String accept(String token) {
         return acceptWithUsage(token).text();
     }
 
     AcceptResult acceptWithUsage(String token) {
-        if (token == null || token.isEmpty()) return new AcceptResult("", false);
+        if (token == null || token.isEmpty()) return new AcceptResult("", "", false);
         pending.append(token);
         return drain(false);
     }
@@ -52,15 +61,16 @@ final class ReasoningTagNormalizer {
 
     private AcceptResult drain(boolean finishing) {
         StringBuilder out = new StringBuilder();
+        StringBuilder thinking = new StringBuilder();
         boolean[] visibleCompletion = new boolean[] { false };
         while (pending.length() > 0) {
             Match match = findNextMatch();
             if (match != null) {
-                emitTextBeforeMatch(out, match.index, visibleCompletion);
+                emitTextBeforeMatch(out, thinking, match.index, visibleCompletion);
                 pending.delete(0, match.alias.raw.length());
                 switch (match.kind) {
-                    case REASONING_OPEN -> beginReasoning(out);
-                    case REASONING_CLOSE -> emitReasoningBlock(out);
+                    case REASONING_OPEN -> beginReasoning();
+                    case REASONING_CLOSE -> emitReasoningBlock();
                     case IGNORE_OPEN -> inIgnoredBlock = true;
                     case IGNORE_CLOSE -> inIgnoredBlock = false;
                     case IGNORE_SELF -> {
@@ -72,25 +82,25 @@ final class ReasoningTagNormalizer {
             int keepLength = finishing ? 0 : longestAliasPrefixSuffixLength();
             int safeLength = pending.length() - keepLength;
             if (safeLength <= 0) break;
-            emitText(out, pending.substring(0, safeLength), visibleCompletion);
+            emitText(out, thinking, pending.substring(0, safeLength), visibleCompletion);
             pending.delete(0, safeLength);
         }
 
         if (finishing && inReasoning) {
-            emitReasoningBlock(out);
+            emitReasoningBlock();
         }
-        return new AcceptResult(out.toString(), visibleCompletion[0]);
+        return new AcceptResult(out.toString(), thinking.toString(), visibleCompletion[0]);
     }
 
-    private void emitTextBeforeMatch(StringBuilder out, int length, boolean[] visibleCompletion) {
+    private void emitTextBeforeMatch(StringBuilder out, StringBuilder thinking, int length, boolean[] visibleCompletion) {
         if (length <= 0) return;
-        emitText(out, pending.substring(0, length), visibleCompletion);
+        emitText(out, thinking, pending.substring(0, length), visibleCompletion);
         pending.delete(0, length);
     }
 
-    private void emitText(StringBuilder out, String text, boolean[] visibleCompletion) {
+    private void emitText(StringBuilder out, StringBuilder thinking, String text, boolean[] visibleCompletion) {
         if (inReasoning) {
-            emitReasoningText(out, text);
+            emitReasoningText(thinking, text);
         } else if (inIgnoredBlock) {
             return;
         } else {
@@ -99,21 +109,22 @@ final class ReasoningTagNormalizer {
         }
     }
 
-    private void emitReasoningText(StringBuilder out, String text) {
+    private void emitReasoningText(StringBuilder thinking, String text) {
+        if (!captureThinkingContent) return;
         if (reasoningEmitted) {
-            out.append(text);
+            thinking.append(text);
             return;
         }
         reasoningPrefixBuffer.append(text);
         if (reasoningPrefixBuffer.toString().trim().isEmpty()) return;
-        out.append(CANONICAL_OPEN).append(reasoningPrefixBuffer);
+        thinking.append(reasoningPrefixBuffer);
         reasoningPrefixBuffer.setLength(0);
         reasoningEmitted = true;
     }
 
-    private void beginReasoning(StringBuilder out) {
+    private void beginReasoning() {
         if (inReasoning) {
-            emitReasoningText(out, CANONICAL_OPEN);
+            emitReasoningText(new StringBuilder(), CANONICAL_OPEN);
             return;
         }
         inReasoning = true;
@@ -121,12 +132,9 @@ final class ReasoningTagNormalizer {
         reasoningPrefixBuffer.setLength(0);
     }
 
-    private void emitReasoningBlock(StringBuilder out) {
+    private void emitReasoningBlock() {
         if (!inReasoning) {
             return;
-        }
-        if (reasoningEmitted) {
-            out.append(CANONICAL_CLOSE);
         }
         reasoningPrefixBuffer.setLength(0);
         reasoningEmitted = false;
@@ -244,6 +252,10 @@ final class ReasoningTagNormalizer {
         add(aliases, "<|begin_reasoning|>");
         add(aliases, "<|start_thinking|>");
         add(aliases, "<|startofthought|>");
+        add(aliases, "<|channel>thought");
+        add(aliases, "<|channel>analysis");
+        add(aliases, "<channel|>thought");
+        add(aliases, "<channel|>analysis");
         add(aliases, "<|analysis|>", true, false);
         add(aliases, "analysis:", true, false);
         return sort(aliases);
@@ -266,6 +278,9 @@ final class ReasoningTagNormalizer {
         add(aliases, "<|end_reasoning|>");
         add(aliases, "<|end_thinking|>");
         add(aliases, "<|endofthought|>");
+        add(aliases, "<|channel>final", false, true);
+        add(aliases, "<channel|>final", false, true);
+        add(aliases, "<channel|>", false, true);
         add(aliases, "<|final|>", true, true);
         add(aliases, "<|assistant|>final", true, true);
         add(aliases, "<|end|>", false, true);
@@ -326,6 +341,6 @@ final class ReasoningTagNormalizer {
     private record Match(int index, TagAlias alias, MatchKind kind) {
     }
 
-    record AcceptResult(String text, boolean visibleCompletion) {
+    record AcceptResult(String text, String thinkingContent, boolean visibleCompletion) {
     }
 }

@@ -8,6 +8,7 @@ import java.util.function.Consumer;
 import com.rheinmetal.tianshu.libs.llm.InferenceEvent;
 import com.rheinmetal.tianshu.libs.llm.FlashAttentionMode;
 import com.rheinmetal.tianshu.libs.llm.KvCacheType;
+import com.rheinmetal.tianshu.libs.llm.LlmContextBudgetPolicy;
 
 public class ServerConfig {
     public static final int DEFAULT_CONTEXT_SIZE = 16000;
@@ -24,6 +25,7 @@ public class ServerConfig {
     public String device;
     public String modelAlias = "unknown";
     public String modelProfile;
+    public String mtpDraftModelPath;
     public String embeddingModelPath;
     public int embeddingContextSize = DEFAULT_CONTEXT_SIZE;
     public int embeddingThreads = DEFAULT_THREAD_COUNT;
@@ -34,10 +36,10 @@ public class ServerConfig {
     public int chatThreads = DEFAULT_THREAD_COUNT;
     public int chatMaxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
     public int taskThreads = Math.max(1, Math.min(2, DEFAULT_THREAD_COUNT));
-    public boolean taskSuspendOnChat = true;
     public FlashAttentionMode flashAttentionMode = FlashAttentionMode.ENABLED;
     public KvCacheType cacheTypeK;
     public KvCacheType cacheTypeV;
+    public LlmContextBudgetPolicy contextBudgetPolicy = LlmContextBudgetPolicy.defaults();
     public int requestTimeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS;
     public Consumer<InferenceEvent> inferenceEventListener;
 

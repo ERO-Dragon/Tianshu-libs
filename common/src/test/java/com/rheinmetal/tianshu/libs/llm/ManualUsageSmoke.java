@@ -58,7 +58,6 @@ public class ManualUsageSmoke {
                 .chatThreads(chatThreads)
                 .chatMaxQueueSize(4)
                 .taskThreads(2)
-                .taskSuspendOnChat(true)
                 .gpuLayers(gpuLayers)
                 .requestTimeoutSeconds(300);
         if (!device.isBlank()) {

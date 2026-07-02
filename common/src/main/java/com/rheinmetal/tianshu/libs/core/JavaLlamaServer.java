@@ -12,6 +12,9 @@ import com.rheinmetal.tianshu.libs.llm.LaneConfig;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
 import com.rheinmetal.tianshu.libs.llm.LlmGenerationResult;
 import com.rheinmetal.tianshu.libs.llm.LlmStreamFinish;
+import com.rheinmetal.tianshu.libs.llm.LlmContextBudgetPlan;
+import com.rheinmetal.tianshu.libs.llm.LlmContextBudgetPolicy;
+import com.rheinmetal.tianshu.libs.llm.LlmRuntimeCapabilities;
 import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
@@ -45,6 +48,25 @@ public class JavaLlamaServer {
         return new Builder();
     }
 
+    public static LlmContextBudgetPlan dryRunContextBudget(ServerConfig config) throws Exception {
+        ServerConfig.validateOrThrow(config);
+        return dryRunContextBudgetInternal(copyConfig(config));
+    }
+
+    private static LlmContextBudgetPlan dryRunContextBudgetInternal(ServerConfig config) throws Exception {
+        return LlamaEngine.dryRunContextBudget(
+                config.modelPath,
+                config.contextSize,
+                config.chatThreads,
+                config.gpuLayers,
+                config.device,
+                config.flashAttentionMode,
+                config.cacheTypeK,
+                config.cacheTypeV,
+                config.contextBudgetPolicy
+        );
+    }
+
     public synchronized void start() throws Exception {
         if (started.get()) return;
         ServerConfig.validateOrThrow(config);
@@ -64,6 +86,7 @@ public class JavaLlamaServer {
             LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.contextSize, config.taskThreads, ServerConfig.TASK_HOT_SUSPEND_SLOTS);
             engine = LlamaEngine.loadChatEngine(
                     config.modelPath,
+                    config.mtpDraftModelPath,
                     chatLaneConfig,
                     taskLaneConfig,
                     config.gpuLayers,
@@ -73,7 +96,7 @@ public class JavaLlamaServer {
                     config.flashAttentionMode,
                     config.cacheTypeK,
                     config.cacheTypeV,
-                    config.taskSuspendOnChat,
+                    config.contextBudgetPolicy,
                     config.inferenceEventListener
             );
 
@@ -192,6 +215,16 @@ public class JavaLlamaServer {
         return requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken, onFinish);
     }
 
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                InferenceOptions options,
+                                                Consumer<String> onToken,
+                                                Consumer<String> onThinking,
+                                                Consumer<LlmStreamFinish> onFinish) {
+        return requireLibsApi().chatStream(messages, sampler, maxTokens, options, onToken, onThinking, onFinish);
+    }
+
     public CompletableFuture<String> task(List<ChatMessage> messages,
                                                 SamplerConfig sampler,
                                                 int maxTokens,
@@ -237,6 +270,17 @@ public class JavaLlamaServer {
         return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer);
     }
 
+    public CompletableFuture<String> taskStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                int priority,
+                                                boolean preemptible,
+                                                InferenceOptions options,
+                                                Consumer<String> tokenConsumer,
+                                                Consumer<String> thinkingConsumer) {
+        return requireLibsApi().taskStream(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, thinkingConsumer);
+    }
+
     public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
                                                                       SamplerConfig sampler,
                                                                       int maxTokens,
@@ -246,6 +290,18 @@ public class JavaLlamaServer {
                                                                       Consumer<String> tokenConsumer,
                                                                       Consumer<LlmStreamFinish> finishConsumer) {
         return requireLibsApi().taskStreamWithUsage(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+    }
+
+    public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
+                                                                      SamplerConfig sampler,
+                                                                      int maxTokens,
+                                                                      int priority,
+                                                                      boolean preemptible,
+                                                                      InferenceOptions options,
+                                                                      Consumer<String> tokenConsumer,
+                                                                      Consumer<String> thinkingConsumer,
+                                                                      Consumer<LlmStreamFinish> finishConsumer) {
+        return requireLibsApi().taskStreamWithUsage(messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, thinkingConsumer, finishConsumer);
     }
 
     public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler) {
@@ -287,6 +343,21 @@ public class JavaLlamaServer {
         ModelRegistry current = models;
         if (current == null) return new MtpCapability(false, 0, null);
         return current.getMtpCapability();
+    }
+
+    public LlmRuntimeCapabilities getRuntimeCapabilities() {
+        LibsApi api = libsApi;
+        return api == null ? LlmRuntimeCapabilities.unavailable() : api.getRuntimeCapabilities();
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan() {
+        LibsApi api = libsApi;
+        return api == null ? LlmContextBudgetPlan.unavailable("Model is not loaded") : api.getContextBudgetPlan();
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane) {
+        LibsApi api = libsApi;
+        return api == null ? LlmContextBudgetPlan.unavailable("Model is not loaded") : api.getContextBudgetPlan(lane);
     }
 
     public CompletableFuture<MtpCalibrationResult> calibrateMtpAsync() {
@@ -359,6 +430,7 @@ public class JavaLlamaServer {
         copy.device = source.device;
         copy.modelAlias = source.modelAlias;
         copy.modelProfile = source.modelProfile;
+        copy.mtpDraftModelPath = source.mtpDraftModelPath;
         copy.embeddingModelPath = source.embeddingModelPath;
         copy.embeddingContextSize = source.embeddingContextSize;
         copy.embeddingThreads = source.embeddingThreads;
@@ -369,10 +441,10 @@ public class JavaLlamaServer {
         copy.chatThreads = source.chatThreads;
         copy.chatMaxQueueSize = source.chatMaxQueueSize;
         copy.taskThreads = source.taskThreads;
-        copy.taskSuspendOnChat = source.taskSuspendOnChat;
         copy.flashAttentionMode = source.flashAttentionMode;
         copy.cacheTypeK = source.cacheTypeK;
         copy.cacheTypeV = source.cacheTypeV;
+        copy.contextBudgetPolicy = source.contextBudgetPolicy != null ? source.contextBudgetPolicy : LlmContextBudgetPolicy.defaults();
         copy.requestTimeoutSeconds = source.requestTimeoutSeconds;
         copy.inferenceEventListener = source.inferenceEventListener;
         return copy;
@@ -423,6 +495,11 @@ public class JavaLlamaServer {
             return this;
         }
 
+        public Builder mtpDraftModel(String path) {
+            config.mtpDraftModelPath = path;
+            return this;
+        }
+
         public Builder flashAttention(FlashAttentionMode mode) {
             config.flashAttentionMode = mode != null ? mode : FlashAttentionMode.ENABLED;
             return this;
@@ -435,6 +512,11 @@ public class JavaLlamaServer {
 
         public Builder cacheTypeV(KvCacheType type) {
             config.cacheTypeV = type;
+            return this;
+        }
+
+        public Builder contextBudgetPolicy(LlmContextBudgetPolicy policy) {
+            config.contextBudgetPolicy = policy != null ? policy : LlmContextBudgetPolicy.defaults();
             return this;
         }
 
@@ -473,11 +555,6 @@ public class JavaLlamaServer {
             return this;
         }
 
-        public Builder taskSuspendOnChat(boolean value) {
-            config.taskSuspendOnChat = value;
-            return this;
-        }
-
         public Builder requestTimeoutSeconds(int n) {
             config.requestTimeoutSeconds = n;
             return this;
@@ -492,6 +569,12 @@ public class JavaLlamaServer {
             ServerConfig built = copyConfig(config);
             ServerConfig.validateOrThrow(built);
             return new JavaLlamaServer(built);
+        }
+
+        public LlmContextBudgetPlan dryRunContextBudget() throws Exception {
+            ServerConfig built = copyConfig(config);
+            ServerConfig.validateOrThrow(built);
+            return JavaLlamaServer.dryRunContextBudgetInternal(built);
         }
 
         private static String normalizeDevice(String device) {

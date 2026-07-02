@@ -7,12 +7,12 @@ libs 只提供底层基础能力，不包含业务逻辑。
 | 能力 | 说明 |
 |------|------|
 | 推理 | chat / chatStream / task / taskStream |
-| token / usage | countChatPromptTokens / LlmTokenUsage |
+| token 预算与实际用量 | `countChatPromptTokens` 用于请求前预算；`LlmTokenUsage` 返回请求后实际用量 |
 | 向量 | embed(text) / embed(texts) |
 | 检索 | search(queryText, texts, topK, threshold) |
 | 调度 | CHAT 优先，可暂停 TASK |
-| 运行选项 | InferenceOptions 控制请求级 MTP 与 Vulkan 时间片优先级 |
-| 能力探测 | supportsMtp / getMtpCapability / calibrateMtp |
+| 运行选项 | InferenceOptions 控制请求级 MTP、Vulkan 时间片优先级和 COT 捕获 |
+| 能力探测 | supportsMtp / getMtpCapability / calibrateMtp / getRuntimeCapabilities / getContextBudgetPlan |
 
 ---
 
@@ -27,6 +27,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .model("models/qwen3.5-4b.gguf")      // 必填：LLM 模型
     .modelAlias("qwen3.5-4b")             // 可选：模型别名
     .modelProfile("auto")                 // 可选：auto / qwen3 / qwen3.5 / deepseek-r1 / generic
+    .mtpDraftModel("models/mtp-gemma-4-E4B-it.gguf") // 可选：Gemma 等分体 MTP draft 模型
     .contextSize(16000)                   // LLM 上下文窗口；CHAT / TASK 共用同一个配置
     .chatThreads(4)
     .chatMaxQueueSize(4)
@@ -36,7 +37,6 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .cacheTypeK(KvCacheType.F16)          // 可选：F16 / Q8_0
     .cacheTypeV(KvCacheType.F16)          // 可选：F16 / Q8_0
     .taskThreads(2)
-    .taskSuspendOnChat(true)
     .inferenceEventListener(event -> {    // 可选：CHAT / TASK 统一推理状态事件
         // event.getType(), event.getLane(), event.getReplayCharacters()
     })
@@ -53,6 +53,38 @@ service.start();      // 加载模型并启动服务
 service.shutdown();   // 游戏关闭或模块卸载时释放资源
 ```
 
+上层需要在加载前规划 ctx 时，应先对同一组模型级参数执行 dryrun：
+
+```java
+LlmContextBudgetPolicy budgetPolicy = new LlmContextBudgetPolicy(64, 512L * 1024L * 1024L);
+
+LlmContextBudgetPlan plan = JavaLlamaServer.builder()
+    .model("models/qwen3.5-4b.gguf")
+    .contextSize(262144)                  // 查询上限；可传模型训练 ctx 或部署允许的最大值
+    .gpuLayers(999)
+    .device("0")
+    .flashAttention(FlashAttentionMode.ENABLED)
+    .cacheTypeK(KvCacheType.F16)
+    .cacheTypeV(KvCacheType.F16)
+    .contextBudgetPolicy(budgetPolicy)
+    .dryRunContextBudget();
+
+int ctxToLoad = plan.plannedContextSize();
+
+JavaLlamaServer service = JavaLlamaServer.builder()
+    .model("models/qwen3.5-4b.gguf")
+    .contextSize(ctxToLoad)               // 显式使用 dryrun 返回值；libs 不做黑盒裁剪
+    .gpuLayers(999)
+    .device("0")
+    .flashAttention(FlashAttentionMode.ENABLED)
+    .cacheTypeK(KvCacheType.F16)
+    .cacheTypeV(KvCacheType.F16)
+    .contextBudgetPolicy(budgetPolicy)    // 与 dryrun 保持一致；用于启动校验和生成余量
+    .build();
+```
+
+`dryRunContextBudget()` 只做 JJML context plan / 元数据 / 显存预算查询，不启动推理 worker，也不加载可用于推理的模型实例。`start()` 会用同一套底层 plan 再校验一次；如果请求的 `contextSize` 超出 dryrun 可接受值，启动会失败并提示上层先使用 dryrun 结果，而不是静默降级到另一个 ctx。
+
 `start()` 可能耗时较长，主包不应在 Minecraft 主线程中同步阻塞等待模型加载。
 
 模型级推理参数说明：
@@ -62,11 +94,14 @@ service.shutdown();   // 游戏关闭或模块卸载时释放资源
 | `contextSize` | `16000` | LLM 上下文窗口大小；模型加载服务后固定，CHAT / TASK 共用同一配置 |
 | `gpuLayers` | `999` | 交给 JJML / llama.cpp 的 GPU offload 层数；通常用于尽量全量放到 GPU |
 | `device` | `null` | 可选设备选择器；纯数字会规范化为 JJML 设备索引格式，例如 `"0"` -> `"#0"` |
-| `flashAttention` | `FlashAttentionMode.ENABLED` | Flash Attention 模式；属于 context/runtime 结构配置，不是单次请求参数 |
+| `flashAttention` | `FlashAttentionMode.ENABLED` | Flash Attention 模式；属于模型级 context/runtime 结构配置，不是单次请求参数 |
 | `cacheTypeK` | `null` | K cache 类型；`null` 表示使用 JJML 默认值，可显式设置 `F16` / `Q8_0` |
 | `cacheTypeV` | `null` | V cache 类型；`null` 表示使用 JJML 默认值，可显式设置 `F16` / `Q8_0` |
+| `contextBudgetPolicy` | `LlmContextBudgetPolicy.defaults()` | 模型级上下文预算策略；dryrun 使用 `safetyMarginBytes` 估算安全 ctx，运行期使用 `promptMarginTokens` 裁剪生成预算 |
 
-`flashAttention`、`cacheTypeK`、`cacheTypeV` 都会在创建 `LlamaCppContext` 时写入 JJML context params，因此它们是服务级配置：同一个 `JavaLlamaServer` 实例内的 `chat` / `task` 会使用同一组设置。如果需要对比不同 FA 或 KV cache 配置，应创建不同服务实例或重新加载模型服务。
+`flashAttention`、`cacheTypeK`、`cacheTypeV` 都会在创建 `LlamaCppContext` 时写入 JJML context params，因此它们是模型级配置：同一个已加载模型内的 `chat` / `task` 会使用同一组设置。如果需要对比不同 FA 或 KV cache 配置，应创建不同模型实例或重新加载模型。
+
+`contextBudgetPolicy` 同样是模型级配置，不是业务 prompt 协议。默认值保守提供通用预算参考：`promptMarginTokens=64`、`safetyMarginBytes=512MiB`。上层通过 `contextBudgetPolicy(...)` 传入完整策略。libs 不会在 `start()` 中黑盒修改 `contextSize`；上层应把 dryrun 返回的 `plannedContextSize` 显式写回加载配置。如果 dryrun 使用了自定义预算策略，正式加载也应传入同一策略，避免启动校验和运行期 prompt 余量口径不一致。
 
 ### 2.1 推理
 
@@ -90,6 +125,7 @@ CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig s
 CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, Consumer<String> onToken);
 CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken);
 CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken, Consumer<LlmStreamFinish> onFinish);
+CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, InferenceOptions options, Consumer<String> onToken, Consumer<String> onThinking, Consumer<LlmStreamFinish> onFinish);
 
 // 请求前 token 预算查询；使用当前 LLM 的 chat template + tokenizer
 int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler);
@@ -102,14 +138,22 @@ CompletableFuture<LlmGenerationResult> taskWithUsage(List<ChatMessage> messages,
 // 后台任务 - 流式返回
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, Consumer<String> tokenConsumer);
 CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer);
+CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<String> thinkingConsumer);
 CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<LlmStreamFinish> finishConsumer);
+CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<String> thinkingConsumer, Consumer<LlmStreamFinish> finishConsumer);
 ```
 
 所有 `chat` / `chatStream` / `task` / `taskStream` 返回的 `CompletableFuture` 都是本次请求的控制句柄：
 
-- 成功时 future 返回完整文本，`WithUsage` 变体返回 `LlmGenerationResult`。
+- 成功时 future 返回完整正文文本，`WithUsage` 变体返回 `LlmGenerationResult`；思考内容不会混入正文。
 - 调用 `future.cancel(false)` 会取消对应请求；流式请求会通过 `LlmStreamFinish` 返回 `CANCELLED` 和已知 usage。
 - `chat` 不会抢占另一个正在执行的 `chat`；新的 CHAT 请求仍按 CHAT 队列排序执行。
+
+`maxTokens` 语义：
+
+- `maxTokens > 0`：按调用方指定的最大 completion token 数执行，但会按当前 prompt token 数、实际加载的 `contextSize` 和 `promptMarginTokens` 自动裁剪，避免超过实际 ctx 窗口。
+- `maxTokens == 0`：表示调用方不指定业务输出上限，libs 只按当前 prompt token 数、实际加载的 `contextSize` 和 `promptMarginTokens` 裁剪到上下文剩余空间。
+- 当 prompt 已经占满上下文预算时，completion 预算为 0，本次请求会正常结束并返回已知 usage，不再进入无界生成。
 
 ### 2.1.1 推理状态事件
 
@@ -156,11 +200,11 @@ public enum InferenceEventType {
 所有归一化都发生在内部 token 输出边界，对 `chat` / `chatStream` / `task` / `taskStream` 统一生效。
 
 - 不同开源模型可能使用不同的思考包裹格式，例如 `<think>`、`<reasoning>`、`<thought>`、`<analysis>`、`<|begin_of_thought|>` 等。
-- libs 会把已知思考包裹统一归一化为 `<think>...</think>` 后返回，便于上层只处理一种格式。
+- libs 会识别已知思考包裹，并把思考内容从正式正文中剥离；正式正文永远不包含 `<think>...</think>`。
 - 空思考块会被清洗掉，例如 `<think></think>`、`<think>\n\n</think>` 或 no-think 标记块，不再返回给上层。
-- 流式输出不会缓冲完整思考段。内部只暂存可能组成标签的短尾部，以及开标签后的空白前缀；一旦出现非空思考内容，会立即流式输出规范化后的 `<think>` 和后续内容。
+- 流式输出使用两个通道：`onToken` 只接收正式正文 token；可选 `onThinking` 只接收思考内容 token。`LlmStreamFinish.thinkingContent()` 会带最终汇总，便于上层兜底和落盘。
 - `enableThinking` / `ThinkingMode` 仍然只是生成前的模板控制；输出归一化是生成后的统一兼容层，二者互不改变对外 API。
-- `LlmTokenUsage.completionTokens` 只统计归一化后可见回答 token；被识别为思考包裹内的 token 不计入 completion。
+- `LlmGenerationResult.text()` 是正式正文，`thinkingContent()` 是可选捕获的思考内容。`LlmTokenUsage.completionTokens` 只统计正式正文 token；被识别为思考包裹内的 token 不计入 completion。
 
 ### 2.1.3 请求级运行选项
 
@@ -171,6 +215,7 @@ InferenceOptions options = InferenceOptions.builder()
     .mtpEnabled(true)          // 本轮请求尝试使用 MTP；模型不支持时自动走普通推理
     .mtpDraftMax(null)         // null 表示使用当前模型已校准的推荐值；未校准时使用默认值
     .vulkanPriority(0.35f)     // 0.0~1.0；值越低越倾向于给游戏渲染让路
+    .captureThinkingContent(true) // true 表示把已识别思考内容写入 thinkingContent / onThinking
     .build();
 
 String reply = service.chat(messages, sampler, 256, options).get();
@@ -183,10 +228,13 @@ String reply = service.chat(messages, sampler, 256, options).get();
 | `mtpEnabled` | false | 是否在本轮请求尝试使用 MTP speculative decoding |
 | `mtpDraftMax` | null | 本轮请求指定 draft token 窗口；null 表示使用自动校准出的推荐值 |
 | `vulkanPriority` | null | Vulkan 时间片推理优先级；null 表示不改动底层调度状态 |
+| `captureThinkingContent` | false | 是否把已识别的思考内容返回到结构化 thinking 通道；false 时仍正常生成和计 usage，但丢弃思考内容 |
 
 说明：
 
 - MTP 是请求级开关，不是模型加载时的永久开关；同一个模型可以某些请求启用 MTP，某些请求走普通推理。
+- 外部 MTP draft 是模型加载期能力来源：显式配置 `mtpDraftModel(path)` 会加载指定 draft；未配置时只加载 target 模型。
+- libs 会自动缓存成功校准或运行期采样得到的推荐 `draftMax`。缓存默认位于运行目录的 `config/Tianshu/libs/mtp`，可通过系统属性 `tianshu.libs.mtpCacheDir` 覆盖；缓存 key 包含 target 模型、外部 draft 模型、文件元数据、GPU layers 和 device。
 - 当模型不支持 MTP，或 MTP 初始化失败时，libs 会安全降级到普通推理，不要求上层额外兜底。
 - `vulkanPriority=1.0f` 近似普通 Vulkan 执行；`vulkanPriority=0.0f` 最大程度让位给游戏侧负载。
 - Vulkan 时间片能力依赖当前运行时的 Vulkan backend、驱动和扩展支持；不支持时该设置会被忽略。
@@ -212,6 +260,10 @@ if (supported && !capability.isCalibrated()) {
 ```java
 boolean supportsMtp();
 MtpCapability getMtpCapability();
+LlmRuntimeCapabilities getRuntimeCapabilities();
+LlmContextBudgetPlan JavaLlamaServer.Builder.dryRunContextBudget();
+LlmContextBudgetPlan getContextBudgetPlan();
+LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane);
 CompletableFuture<MtpCalibrationResult> calibrateMtpAsync();
 CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request);
 MtpCalibrationResult calibrateMtp() throws Exception;
@@ -223,6 +275,8 @@ MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exceptio
 | 类型 | 说明 |
 |------|------|
 | `MtpCapability` | 当前模型是否支持 MTP、MTP 层数、是否已有校准结果、推荐 `draftMax` |
+| `LlmRuntimeCapabilities` | 当前已加载模型和 chat template 的运行能力快照 |
+| `LlmContextBudgetPlan` | 当前 lane 在创建 ctx 前的 context、输入预算和显存估算计划 |
 | `MtpCalibrationRequest` | 校准范围：draftMax 自动扫描或手动上限、每轮生成 token 数、目标长 prompt token 数 |
 | `MtpCalibrationResult` | 校准是否支持、测试列表、最佳 trial、最佳 `draftMax` |
 | `MtpTrialResult` | 单次测试的速度、接受率、draft/accepted token 数等统计 |
@@ -273,7 +327,7 @@ List<RagSearchResult> search(String queryText, List<String> texts);
 ### 2.4 调度规则
 
 - CHAT 通道优先级高于 TASK
-- CHAT 请求会挂起正在执行的 TASK 任务（`taskSuspendOnChat=true`）
+- CHAT 请求会挂起正在执行的 TASK 任务；当前版本该策略固定启用。
 - TASK 任务在 `preemptible=true` 时可被更高优先级 TASK 抢占
 - TASK 逻辑队列按 priority + FIFO 排序；TASK 接收不受热挂起槽数量限制。
 - TASK 挂起只使用冷挂起（COLD）：关闭当前 `LlamaCppContext` / KV，只保留格式化 prompt、prompt token ids、已生成 token ids、模型原始已生成文本和归一化输出状态，并回到 TASK 队列。
@@ -359,10 +413,10 @@ public record LlmTokenUsage(int promptTokens, int completionTokens) {
     public int totalTokens(); // promptTokens + completionTokens
 }
 
-public record LlmGenerationResult(String text, LlmTokenUsage usage) {
+public record LlmGenerationResult(String text, LlmTokenUsage usage, String thinkingContent) {
 }
 
-public record LlmStreamFinish(StreamFinishType type, LlmTokenUsage usage, Throwable error) {
+public record LlmStreamFinish(StreamFinishType type, LlmTokenUsage usage, Throwable error, String thinkingContent) {
 }
 
 public enum StreamFinishType {
@@ -377,8 +431,10 @@ public enum StreamFinishType {
 - `promptTokens`：实际 chat template 渲染后的 prompt token 数。
 - `completionTokens`：模型实际生成且归一化后对上层可见的回答 token 数；识别出的 COT token 不计入。
 - `totalTokens()`：`promptTokens + completionTokens`。
-- 非流式 `chatWithUsage` / `taskWithUsage` 成功完成时通过 `LlmGenerationResult` 返回 usage。
-- 流式请求通过 `LlmStreamFinish` 返回终态和 usage；取消时 future 进入取消态，finish type 为 `CANCELLED`。
+- `text`：正式正文，不包含已识别的思考包裹内容。
+- `thinkingContent`：当 `captureThinkingContent(true)` 时返回已识别的思考内容；否则为空字符串。
+- 非流式 `chatWithUsage` / `taskWithUsage` 成功完成时通过 `LlmGenerationResult` 返回 usage 和可选 thinking 汇总。
+- 流式请求通过 `LlmStreamFinish` 返回终态、usage 和可选 thinking 汇总；取消时 future 进入取消态，finish type 为 `CANCELLED`。
 
 ### 3.5 FlashAttentionMode 与 KvCacheType
 
@@ -412,10 +468,14 @@ public final class InferenceOptions {
     public boolean isMtpEnabled();
     public Integer getMtpDraftMax();
     public Float getVulkanPriority();
+    public boolean isCaptureThinkingContent();
 }
 ```
 
 `InferenceOptions` 是不可变对象，提交任务时会复制快照。上层可以安全复用模板对象，也可以为每轮对话临时构建。
+
+- `captureThinkingContent(false)`：默认值；libs 会识别并移除正文中的思考包裹内容，但不保存 COT。
+- `captureThinkingContent(true)`：把识别出的思考内容写入 `LlmGenerationResult.thinkingContent()`；流式请求同时通过 `onThinking` 增量返回，并在 `LlmStreamFinish.thinkingContent()` 汇总。
 
 ### 3.7 MTP 相关结构
 
@@ -447,6 +507,47 @@ public final class MtpCalibrationResult {
 }
 ```
 
+### 3.8 运行能力与上下文预算结构
+
+```java
+public record LlmContextBudgetPolicy(
+    int promptMarginTokens,
+    long safetyMarginBytes
+) {
+    public static LlmContextBudgetPolicy defaults();
+}
+
+public record LlmRuntimeCapabilities(
+    boolean ready,
+    boolean supportsThinking,
+    boolean supportsMtp,
+    boolean supportsEmbeddedMtp,
+    boolean externalMtpAvailable,
+    int mtpLayerCount
+) {}
+
+public record LlmContextBudgetPlan(
+    int requestedContextSize,
+    int trainingContextSize,
+    int memoryContextSize,
+    int plannedContextSize,
+    int promptTokenBudget,
+    int promptMarginTokens,
+    long safetyMarginBytes,
+    boolean reliable,
+    String limitation
+) {}
+```
+
+说明：
+
+- `getRuntimeCapabilities()` 只返回当前运行状态、thinking 支持和 MTP 可用性；不暴露 JJML chat template 细节或诊断型模型元数据。
+- `dryRunContextBudget()` 是加载前规划入口；上层用它查询在当前模型级参数和安全余量下建议加载的 `plannedContextSize`。
+- `getContextBudgetPlan(lane)` 返回模型启动阶段校验得到的 CHAT / TASK lane 计划，用于运行期观测；正常情况下 `plannedContextSize == requestedContextSize`。如果规划判断需要更小 ctx，`start()` 会失败而不是静默裁剪。
+- `memoryContextSize` 是按当前设备可用显存和安全余量推导出的 ctx 上限；无法可靠估算时为 `-1` 并通过 `limitation` 说明原因。
+- `reliable=false` 表示运行时无法提供完整显存或 KV 估算事实；此时上层不应把 `plannedContextSize` 当成安全规划结果。
+- `trainingContextSize` 只作为模型元数据报告；是否把训练上下文作为硬上限属于上层或部署策略，不在 libs 中隐式截断。
+
 ---
 
 ## 4. 服务状态
@@ -457,6 +558,9 @@ boolean isReady();
 boolean supportsEnableThinking();
 boolean supportsMtp();
 MtpCapability getMtpCapability();
+LlmRuntimeCapabilities getRuntimeCapabilities();
+LlmContextBudgetPlan getContextBudgetPlan();
+LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane);
 
 // 检查队列容量
 boolean hasChatQueueCapacity();
@@ -482,7 +586,7 @@ void shutdown();
 | Lane 调度 | libs 内置：CHAT 优先，可暂停 TASK |
 | RagSearchResult | 只包含 content + score，不包含 id（libs 不知道业务 ID） |
 | 向量维度校验 | 维度不匹配时抛出异常，确保查询和文档使用同一 embedding 模型 |
-| 模型级运行参数 | contextSize / flashAttention / cacheTypeK / cacheTypeV 放在 Builder；创建 context 时统一生效 |
+| 模型级运行参数 | contextSize / flashAttention / cacheTypeK / cacheTypeV / contextBudgetPolicy 放在 Builder；创建 context 时统一生效 |
 | 请求级运行策略 | 采样参数放在 SamplerConfig；MTP / Vulkan 时间片放在 InferenceOptions |
 | MTP 策略 | 模型级能力探测，请求级启用，校准结果缓存在当前 LlamaEngine |
 | 视觉能力 | 当前文本推理路径不加载 mtmd/mmproj；视觉仍保持显式 opt-in，不在本接口中默认启用 |

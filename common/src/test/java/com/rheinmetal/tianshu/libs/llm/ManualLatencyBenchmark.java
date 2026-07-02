@@ -46,7 +46,6 @@ public class ManualLatencyBenchmark {
                 .chatThreads(chatThreads)
                 .chatMaxQueueSize(1)
                 .taskThreads(1)
-                .taskSuspendOnChat(true)
                 .gpuLayers(gpuLayers)
                 .requestTimeoutSeconds(600)
                 .inferenceEventListener(event -> currentRun.get().onEvent(event, gpuIndex));

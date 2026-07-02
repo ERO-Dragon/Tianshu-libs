@@ -6,8 +6,10 @@ import com.rheinmetal.tianshu.libs.llm.InferenceLane;
 import com.rheinmetal.tianshu.libs.llm.InferenceOptions;
 import com.rheinmetal.tianshu.libs.llm.InferenceTask;
 import com.rheinmetal.tianshu.libs.llm.LlamaEngine;
+import com.rheinmetal.tianshu.libs.llm.LlmContextBudgetPlan;
 import com.rheinmetal.tianshu.libs.llm.LlmGenerationResult;
 import com.rheinmetal.tianshu.libs.llm.LlmStreamFinish;
+import com.rheinmetal.tianshu.libs.llm.LlmRuntimeCapabilities;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
 import com.rheinmetal.tianshu.libs.llm.MtpCapability;
@@ -125,7 +127,17 @@ public class LibsApi {
                                                 InferenceOptions options,
                                                 Consumer<String> onToken,
                                                 Consumer<LlmStreamFinish> onFinish) {
-        return doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, options, onToken, onFinish).future;
+        return doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, options, onToken, null, onFinish).future;
+    }
+
+    public CompletableFuture<String> chatStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                InferenceOptions options,
+                                                Consumer<String> onToken,
+                                                Consumer<String> onThinking,
+                                                Consumer<LlmStreamFinish> onFinish) {
+        return doStreamChat(InferenceLane.CHAT, messages, sampler, maxTokens, 0, false, options, onToken, onThinking, onFinish).future;
     }
 
     public CompletableFuture<String> task(List<ChatMessage> messages) {
@@ -177,6 +189,17 @@ public class LibsApi {
         return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer).future;
     }
 
+    public CompletableFuture<String> taskStream(List<ChatMessage> messages,
+                                                SamplerConfig sampler,
+                                                int maxTokens,
+                                                int priority,
+                                                boolean preemptible,
+                                                InferenceOptions options,
+                                                Consumer<String> tokenConsumer,
+                                                Consumer<String> thinkingConsumer) {
+        return doStreamChat(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, thinkingConsumer, null).future;
+    }
+
     public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
                                                                       SamplerConfig sampler,
                                                                       int maxTokens,
@@ -185,7 +208,19 @@ public class LibsApi {
                                                                       InferenceOptions options,
                                                                       Consumer<String> tokenConsumer,
                                                                       Consumer<LlmStreamFinish> finishConsumer) {
-        return doStreamChatWithUsage(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+        return doStreamChatWithUsage(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, null, finishConsumer);
+    }
+
+    public CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages,
+                                                                      SamplerConfig sampler,
+                                                                      int maxTokens,
+                                                                      int priority,
+                                                                      boolean preemptible,
+                                                                      InferenceOptions options,
+                                                                      Consumer<String> tokenConsumer,
+                                                                      Consumer<String> thinkingConsumer,
+                                                                      Consumer<LlmStreamFinish> finishConsumer) {
+        return doStreamChatWithUsage(InferenceLane.TASK, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, thinkingConsumer, finishConsumer);
     }
 
     public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler) {
@@ -199,6 +234,18 @@ public class LibsApi {
 
     public MtpCapability getMtpCapability() {
         return chatEngine.getMtpCapability();
+    }
+
+    public LlmRuntimeCapabilities getRuntimeCapabilities() {
+        return chatEngine.getRuntimeCapabilities();
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan() {
+        return chatEngine.getContextBudgetPlan();
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane) {
+        return chatEngine.getContextBudgetPlan(lane);
     }
 
     public CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request) {
@@ -312,7 +359,7 @@ public class LibsApi {
                                                     boolean preemptible,
                                                     InferenceOptions options,
                                                     Consumer<String> tokenConsumer) {
-        return doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, null);
+        return doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, null, null);
     }
 
     private StreamResult doStreamChat(InferenceLane lane,
@@ -323,6 +370,7 @@ public class LibsApi {
                                                     boolean preemptible,
                                                     InferenceOptions options,
                                                     Consumer<String> tokenConsumer,
+                                                    Consumer<String> thinkingConsumer,
                                                     Consumer<LlmStreamFinish> finishConsumer) {
         try {
             validateMaxTokens(maxTokens);
@@ -333,7 +381,7 @@ public class LibsApi {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
-            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer, finishConsumer, options);
+            InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer, thinkingConsumer, finishConsumer, options);
             chatEngine.submitTask(task);
             return new StreamResult(task, cancellableFuture(task));
         } catch (Exception e) {
@@ -398,8 +446,9 @@ public class LibsApi {
                                                                          boolean preemptible,
                                                                          InferenceOptions options,
                                                                          Consumer<String> tokenConsumer,
+                                                                         Consumer<String> thinkingConsumer,
                                                                          Consumer<LlmStreamFinish> finishConsumer) {
-        StreamResult stream = doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, finishConsumer);
+        StreamResult stream = doStreamChat(lane, messages, sampler, maxTokens, priority, preemptible, options, tokenConsumer, thinkingConsumer, finishConsumer);
         if (stream.task == null) {
             CompletableFuture<LlmGenerationResult> failed = new CompletableFuture<>();
             stream.future.whenComplete((result, error) -> {

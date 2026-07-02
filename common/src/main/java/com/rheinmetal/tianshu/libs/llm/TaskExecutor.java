@@ -249,43 +249,50 @@ public class TaskExecutor implements Runnable {
             engine.publishInferenceEvent(task, InferenceEventType.STARTED, "Chat inference started.");
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_STARTED, "Chat prefill started.");
             PromptSnapshot prompt = promptSnapshot(task);
+            int completionLimit = resolveCompletionLimit(task, prompt, engine.getChatLaneConfig());
+            if (completionLimit <= 0) {
+                LlmTokenUsage usage = new LlmTokenUsage(prompt.tokenIds().length, 0);
+                engine.publishInferenceEvent(task, InferenceEventType.PREFILL_COMPLETED, "Chat prefill completed.");
+                completeGeneration(task, "", usage);
+                engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Chat inference completed.", 0, 0, null);
+                engine.finishTask(task);
+                return ExecutionResult.COMPLETED;
+            }
             generator = createTokenGenerator(task, prompt);
             engine.publishInferenceEvent(task, InferenceEventType.PREFILL_COMPLETED, "Chat prefill completed.");
             engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Chat generation started.");
 
             StringBuilder fullResponse = new StringBuilder();
-            ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
-            Consumer<String> callback = task.getStreamCallback();
+            StringBuilder thinkingContent = new StringBuilder();
+            ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer(
+                    task.getInferenceOptions().isCaptureThinkingContent()
+            );
             int generatedTokens = 0;
             int completionTokens = 0;
-            while (task.getMaxTokens() <= 0 || generatedTokens < task.getMaxTokens()) {
+            while (generatedTokens < completionLimit) {
                 if (task.isCancelled()) break;
-                int remaining = task.getMaxTokens() <= 0 ? Integer.MAX_VALUE : task.getMaxTokens() - generatedTokens;
+                int remaining = completionLimit - generatedTokens;
                 GeneratedToken generated = generator.next(remaining);
                 if (generated == null) break;
                 generatedTokens++;
                 ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(generated.text());
-                String normalizedToken = accepted.text();
                 if (accepted.visibleCompletion()) completionTokens++;
-                fullResponse.append(normalizedToken);
-                if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
+                appendAccepted(task, fullResponse, thinkingContent, accepted);
             }
             ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
-            String normalizedRemainder = remainder.text();
-            fullResponse.append(normalizedRemainder);
-            if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
+            appendAccepted(task, fullResponse, thinkingContent, remainder);
 
             LlmTokenUsage usage = new LlmTokenUsage(prompt.tokenIds().length, completionTokens);
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
                 task.getGenerationFuture().cancel(false);
-                publishStreamFinish(task, StreamFinishType.CANCELLED, usage, null);
+                publishStreamFinish(task, StreamFinishType.CANCELLED, usage, null, thinkingContent.toString());
                 engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Chat inference was cancelled.");
                 engine.finishTask(task);
                 return ExecutionResult.COMPLETED;
             }
             recordMtpStats(generator);
-            completeGeneration(task, fullResponse.toString(), usage);
+            completeGeneration(task, fullResponse.toString(), usage, thinkingContent.toString());
             engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Chat inference completed.", 0, generatedTokens, null);
             engine.finishTask(task);
             return ExecutionResult.COMPLETED;
@@ -315,6 +322,17 @@ public class TaskExecutor implements Runnable {
             if (state.generator == null) {
                 if (state.prompt == null) {
                     state.prompt = promptSnapshot(task);
+                }
+                int completionLimit = resolveCompletionLimit(task, state.prompt, engine.getTaskLaneConfig());
+                if (state.generatedTokens >= completionLimit) {
+                    ReasoningTagNormalizer.AcceptResult remainder = state.reasoningNormalizer.finishWithUsage();
+                    state.appendAccepted(remainder);
+                    completeGeneration(task, state.generatedText.toString(), state.usage(), state.thinkingContent.toString());
+                    clearSuspendedTask(task);
+                    state.close();
+                    engine.publishInferenceEvent(task, InferenceEventType.COMPLETED, "Task inference completed.", state.replayCharacters(), state.generatedTokens, null);
+                    engine.finishTask(task);
+                    return ExecutionResult.COMPLETED;
                 }
                 engine.publishInferenceEvent(
                         task,
@@ -348,31 +366,29 @@ public class TaskExecutor implements Runnable {
             engine.publishInferenceEvent(task, InferenceEventType.GENERATION_STARTED, "Task generation started.", state.replayCharacters(), state.generatedTokens, null);
 
             InferenceTokenGenerator generator = state.generator;
-            Consumer<String> callback = task.getStreamCallback();
             ReasoningTagNormalizer reasoningNormalizer = state.reasoningNormalizer;
-            while (task.getMaxTokens() <= 0 || state.generatedTokens < task.getMaxTokens()) {
+            int completionLimit = resolveCompletionLimit(task, state.prompt, engine.getTaskLaneConfig());
+            while (state.generatedTokens < completionLimit) {
                 if (task.isCancelled()) {
                     task.getSyncFuture().cancel(false);
                     task.getGenerationFuture().cancel(false);
                     task.getMtpCalibrationFuture().cancel(false);
                     clearSuspendedTask(task);
-                    publishStreamFinish(task, StreamFinishType.CANCELLED, state.usage(), null);
+                    publishStreamFinish(task, StreamFinishType.CANCELLED, state.usage(), null, state.thinkingContent.toString());
                     state.close();
                     engine.publishInferenceEvent(task, InferenceEventType.CANCELLED, "Task inference was cancelled.", state.replayCharacters(), state.generatedTokens, null);
                     engine.finishTask(task);
                     return ExecutionResult.COMPLETED;
                 }
-                int remaining = task.getMaxTokens() <= 0 ? Integer.MAX_VALUE : task.getMaxTokens() - state.generatedTokens;
+                int remaining = completionLimit - state.generatedTokens;
                 GeneratedToken token = generator.next(remaining);
                 if (token == null) break;
                 state.generatedTokens++;
                 state.generatedTokenIds.add(token.id());
                 state.rawGeneratedText.append(token.text());
                 ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(token.text());
-                String normalizedToken = accepted.text();
                 if (accepted.visibleCompletion()) state.completionTokens++;
-                state.generatedText.append(normalizedToken);
-                if (callback != null && !normalizedToken.isEmpty()) callback.accept(normalizedToken);
+                state.appendAccepted(accepted);
                 if (engine.shouldSuspendTaskLane(task)) {
                     parkSuspendedTask(state);
                     return ExecutionResult.SUSPENDED;
@@ -380,11 +396,9 @@ public class TaskExecutor implements Runnable {
                 state.captureCheckpointIfDue(STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS);
             }
             ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
-            String normalizedRemainder = remainder.text();
-            state.generatedText.append(normalizedRemainder);
-            if (callback != null && !normalizedRemainder.isEmpty()) callback.accept(normalizedRemainder);
+            state.appendAccepted(remainder);
 
-            completeGeneration(task, state.generatedText.toString(), state.usage());
+            completeGeneration(task, state.generatedText.toString(), state.usage(), state.thinkingContent.toString());
             recordMtpStats(state.generator);
             clearSuspendedTask(task);
             state.close();
@@ -408,6 +422,15 @@ public class TaskExecutor implements Runnable {
             }
         }
         return createStandardTokenGenerator(task, prompt.tokenIds());
+    }
+
+    private int resolveCompletionLimit(InferenceTask task, PromptSnapshot prompt, LaneConfig laneConfig) {
+        return GenerationBudget.resolveCompletionLimit(
+                task.getMaxTokens(),
+                engine.getPlannedContextSize(laneConfig.getLane()),
+                prompt.tokenIds().length,
+                engine.getContextBudgetPolicy()
+        );
     }
 
     private InferenceTokenGenerator createResumableTokenGenerator(InferenceTask task, SuspendedTask state) {
@@ -529,7 +552,7 @@ public class TaskExecutor implements Runnable {
         try {
             context = engine.createContext(task.getLane(), options);
             chain = buildSamplerChain(task.getSamplerConfig());
-            return new MtpTokenGenerator(context, chain, tokenIds, promptTokenCount, generatedTokenCount, checkpoint, draftMax);
+            return new MtpTokenGenerator(context, engine.getMtpDraftModel(), chain, tokenIds, promptTokenCount, generatedTokenCount, checkpoint, draftMax);
         } catch (RuntimeException e) {
             if (context != null) try { context.close(); } catch (Exception ignored) {}
             if (chain != null) try { chain.close(); } catch (Exception ignored) {}
@@ -679,18 +702,18 @@ public class TaskExecutor implements Runnable {
     private String buildMtpCalibrationPrompt(InferenceTask task,
                                              MtpCalibrationRequest request,
                                              int draftSearchLimit) {
-        int contextSize = engine.getTaskLaneConfig().getContextSize();
-        int draftOutputReserve = SpeculativeParams.requiredMtpTargetOutputs(draftSearchLimit);
+        int contextSize = engine.getPlannedContextSize(InferenceLane.TASK);
+        int mtpTargetOutputSlots = SpeculativeParams.requiredMtpTargetOutputs(draftSearchLimit);
         int maxRunnablePromptTokens = contextSize
                 - request.getMaxTokens()
-                - draftOutputReserve
+                - mtpTargetOutputSlots
                 - MTP_CALIBRATION_CONTEXT_RESERVE;
         if (maxRunnablePromptTokens < MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS) {
-            throw new IllegalArgumentException("task context size " + contextSize
+            throw new IllegalArgumentException("planned task context size " + contextSize
                     + " is too small for heavy MTP calibration"
                     + " (minimumPromptTokens=" + MtpCalibrationRequest.MIN_HEAVY_PROMPT_TOKENS
                     + ", maxTokens=" + request.getMaxTokens()
-                    + ", draftOutputReserve=" + draftOutputReserve + ")");
+                    + ", mtpTargetOutputSlots=" + mtpTargetOutputSlots + ")");
         }
         int targetPromptTokens = Math.min(request.getTargetPromptTokens(), maxRunnablePromptTokens);
 
@@ -764,18 +787,45 @@ public class TaskExecutor implements Runnable {
     }
 
     private void completeGeneration(InferenceTask task, String text, LlmTokenUsage usage) {
-        LlmGenerationResult result = new LlmGenerationResult(text, usage);
-        publishStreamFinish(task, StreamFinishType.COMPLETED, usage, null);
+        completeGeneration(task, text, usage, "");
+    }
+
+    private void completeGeneration(InferenceTask task, String text, LlmTokenUsage usage, String thinkingContent) {
+        LlmGenerationResult result = new LlmGenerationResult(text, usage, thinkingContent);
+        publishStreamFinish(task, StreamFinishType.COMPLETED, usage, null, thinkingContent);
         task.getSyncFuture().complete(text);
         task.getGenerationFuture().complete(result);
     }
 
     private void publishStreamFinish(InferenceTask task, StreamFinishType type, LlmTokenUsage usage, Throwable error) {
+        publishStreamFinish(task, type, usage, error, "");
+    }
+
+    private void publishStreamFinish(InferenceTask task, StreamFinishType type, LlmTokenUsage usage, Throwable error, String thinkingContent) {
         Consumer<LlmStreamFinish> callback = task.getFinishCallback();
         if (callback == null) return;
         try {
-            callback.accept(new LlmStreamFinish(type, usage, error));
+            callback.accept(new LlmStreamFinish(type, usage, error, thinkingContent));
         } catch (Exception ignored) {
+        }
+    }
+
+    private void appendAccepted(InferenceTask task,
+                                StringBuilder text,
+                                StringBuilder thinkingContent,
+                                ReasoningTagNormalizer.AcceptResult accepted) {
+        String acceptedText = accepted.text();
+        if (!acceptedText.isEmpty()) {
+            text.append(acceptedText);
+            Consumer<String> streamCallback = task.getStreamCallback();
+            if (streamCallback != null) streamCallback.accept(acceptedText);
+        }
+
+        String acceptedThinking = accepted.thinkingContent();
+        if (!acceptedThinking.isEmpty()) {
+            thinkingContent.append(acceptedThinking);
+            Consumer<String> thinkingCallback = task.getThinkingStreamCallback();
+            if (thinkingCallback != null) thinkingCallback.accept(acceptedThinking);
         }
     }
 
@@ -797,7 +847,7 @@ public class TaskExecutor implements Runnable {
             suspended.task.getGenerationFuture().cancel(false);
             suspended.task.getMtpCalibrationFuture().cancel(false);
             suspended.close();
-            publishStreamFinish(suspended.task, StreamFinishType.CANCELLED, suspended.usage(), null);
+            publishStreamFinish(suspended.task, StreamFinishType.CANCELLED, suspended.usage(), null, suspended.thinkingContent.toString());
             engine.publishInferenceEvent(suspended.task, InferenceEventType.CANCELLED, "Task was cancelled during shutdown.");
             engine.finishTask(suspended.task);
         }
@@ -817,9 +867,10 @@ public class TaskExecutor implements Runnable {
     private static class SuspendedTask {
         private final InferenceTask task;
         private final StringBuilder generatedText = new StringBuilder();
+        private final StringBuilder thinkingContent = new StringBuilder();
         private final StringBuilder rawGeneratedText = new StringBuilder();
         private final List<Integer> generatedTokenIds = new ArrayList<>();
-        private final ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer();
+        private final ReasoningTagNormalizer reasoningNormalizer;
         private PromptSnapshot prompt;
         private InferenceTokenGenerator generator;
         private GenerationCheckpoint checkpoint;
@@ -829,6 +880,25 @@ public class TaskExecutor implements Runnable {
 
         private SuspendedTask(InferenceTask task) {
             this.task = task;
+            this.reasoningNormalizer = new ReasoningTagNormalizer(
+                    task.getInferenceOptions().isCaptureThinkingContent()
+            );
+        }
+
+        private void appendAccepted(ReasoningTagNormalizer.AcceptResult accepted) {
+            String acceptedText = accepted.text();
+            if (!acceptedText.isEmpty()) {
+                generatedText.append(acceptedText);
+                Consumer<String> streamCallback = task.getStreamCallback();
+                if (streamCallback != null) streamCallback.accept(acceptedText);
+            }
+
+            String acceptedThinking = accepted.thinkingContent();
+            if (!acceptedThinking.isEmpty()) {
+                thinkingContent.append(acceptedThinking);
+                Consumer<String> thinkingCallback = task.getThinkingStreamCallback();
+                if (thinkingCallback != null) thinkingCallback.accept(acceptedThinking);
+            }
         }
 
         private void close() {

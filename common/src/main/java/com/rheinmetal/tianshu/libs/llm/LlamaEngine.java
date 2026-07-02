@@ -2,7 +2,10 @@ package com.rheinmetal.tianshu.libs.llm;
 
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppChatMessage;
+import org.argeo.jjml.llm.LlamaCppContextPlan;
+import org.argeo.jjml.llm.LlamaCppDevice;
 import org.argeo.jjml.llm.LlamaCppModel;
+import org.argeo.jjml.llm.LlamaCppModelInfo;
 import org.argeo.jjml.llm.SpeculativeParams;
 import org.argeo.jjml.llm.params.ContextParam;
 import org.argeo.jjml.llm.params.ContextParams;
@@ -27,6 +30,8 @@ public class LlamaEngine {
 
     private final String engineName;
     private final LlamaCppModel model;
+    private final LlamaCppModel mtpDraftModel;
+    private final MtpDraftMaxCache.Key mtpDraftMaxCacheKey;
     private final LaneConfig chatLaneConfig;
     private final LaneConfig taskLaneConfig;
     private final int gpuLayers;
@@ -36,7 +41,11 @@ public class LlamaEngine {
     private final FlashAttentionMode flashAttentionMode;
     private final KvCacheType cacheTypeK;
     private final KvCacheType cacheTypeV;
-    private final boolean taskSuspendOnChat;
+    private final LlmContextBudgetPolicy contextBudgetPolicy;
+    private final LlmContextBudgetPlan chatContextBudgetPlan;
+    private final LlmContextBudgetPlan taskContextBudgetPlan;
+    private final ContextParams chatContextParams;
+    private final ContextParams taskContextParams;
     private final Consumer<InferenceEvent> inferenceEventListener;
     private final MtpAutoTuner mtpAutoTuner;
 
@@ -57,6 +66,9 @@ public class LlamaEngine {
 
     private LlamaEngine(String engineName,
                         LlamaCppModel model,
+                        LlamaCppModel mtpDraftModel,
+                        MtpDraftMaxCache.Key mtpDraftMaxCacheKey,
+                        Integer cachedMtpDraftMax,
                         LaneConfig chatLaneConfig,
                         LaneConfig taskLaneConfig,
                         int gpuLayers,
@@ -66,10 +78,16 @@ public class LlamaEngine {
                         FlashAttentionMode flashAttentionMode,
                         KvCacheType cacheTypeK,
                         KvCacheType cacheTypeV,
-                        boolean taskSuspendOnChat,
+                        LlmContextBudgetPolicy contextBudgetPolicy,
+                        LlmContextBudgetPlan chatContextBudgetPlan,
+                        LlmContextBudgetPlan taskContextBudgetPlan,
+                        ContextParams chatContextParams,
+                        ContextParams taskContextParams,
                         Consumer<InferenceEvent> inferenceEventListener) {
         this.engineName = engineName;
         this.model = model;
+        this.mtpDraftModel = mtpDraftModel;
+        this.mtpDraftMaxCacheKey = mtpDraftMaxCacheKey;
         this.chatLaneConfig = chatLaneConfig;
         this.taskLaneConfig = taskLaneConfig;
         this.gpuLayers = gpuLayers;
@@ -79,9 +97,17 @@ public class LlamaEngine {
         this.flashAttentionMode = flashAttentionMode != null ? flashAttentionMode : FlashAttentionMode.ENABLED;
         this.cacheTypeK = cacheTypeK;
         this.cacheTypeV = cacheTypeV;
-        this.taskSuspendOnChat = taskSuspendOnChat;
+        this.contextBudgetPolicy = contextBudgetPolicy != null ? contextBudgetPolicy : LlmContextBudgetPolicy.defaults();
+        this.chatContextBudgetPlan = chatContextBudgetPlan != null ? chatContextBudgetPlan : LlmContextBudgetPlan.unavailable("Context preflight was not run");
+        this.taskContextBudgetPlan = taskContextBudgetPlan != null ? taskContextBudgetPlan : LlmContextBudgetPlan.unavailable("Context preflight was not run");
+        this.chatContextParams = chatContextParams;
+        this.taskContextParams = taskContextParams;
         this.inferenceEventListener = inferenceEventListener;
-        this.mtpAutoTuner = new MtpAutoTuner(safeSupportsMtp(model), safeMtpLayerCount(model));
+        this.mtpAutoTuner = new MtpAutoTuner(
+                safeSupportsMtp(model) || mtpDraftModel != null,
+                safeMtpLayerCount(model, mtpDraftModel),
+                cachedMtpDraftMax
+        );
         this.chatQueue = new LinkedBlockingQueue<>(chatLaneConfig.getMaxQueueSize());
         this.taskQueue = new PriorityBlockingQueue<>();
         this.inferenceExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -105,7 +131,7 @@ public class LlamaEngine {
                                              int gpuLayers, String device, String modelAlias, String modelProfile, int maxQueueSize) throws Exception {
         LaneConfig chatLane = new LaneConfig(InferenceLane.CHAT, contextSize, threadCount, maxQueueSize);
         LaneConfig taskLane = new LaneConfig(InferenceLane.TASK, contextSize, Math.max(1, threadCount), 0);
-        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, device, modelAlias, modelProfile, null, null, true, null);
+        return loadChatEngine(modelPath, chatLane, taskLane, gpuLayers, device, modelAlias, modelProfile, null, null, null);
     }
 
     public static LlamaEngine loadChatEngine(String modelPath,
@@ -117,7 +143,6 @@ public class LlamaEngine {
                                              String modelProfile,
                                              KvCacheType cacheTypeK,
                                              KvCacheType cacheTypeV,
-                                             boolean taskSuspendOnChat,
                                              Consumer<InferenceEvent> inferenceEventListener) throws Exception {
         return loadChatEngine(
                 modelPath,
@@ -130,7 +155,7 @@ public class LlamaEngine {
                 FlashAttentionMode.ENABLED,
                 cacheTypeK,
                 cacheTypeV,
-                taskSuspendOnChat,
+                LlmContextBudgetPolicy.defaults(),
                 inferenceEventListener
         );
     }
@@ -145,15 +170,96 @@ public class LlamaEngine {
                                              FlashAttentionMode flashAttentionMode,
                                              KvCacheType cacheTypeK,
                                              KvCacheType cacheTypeV,
-                                             boolean taskSuspendOnChat,
+                                             LlmContextBudgetPolicy contextBudgetPolicy,
+                                             Consumer<InferenceEvent> inferenceEventListener) throws Exception {
+        return loadChatEngine(
+                modelPath,
+                null,
+                chatLaneConfig,
+                taskLaneConfig,
+                gpuLayers,
+                device,
+                modelAlias,
+                modelProfile,
+                flashAttentionMode,
+                cacheTypeK,
+                cacheTypeV,
+                contextBudgetPolicy,
+                inferenceEventListener
+        );
+    }
+
+    public static LlamaEngine loadChatEngine(String modelPath,
+                                             String mtpDraftModelPath,
+                                             LaneConfig chatLaneConfig,
+                                             LaneConfig taskLaneConfig,
+                                             int gpuLayers,
+                                             String device,
+                                             String modelAlias,
+                                             String modelProfile,
+                                             FlashAttentionMode flashAttentionMode,
+                                             KvCacheType cacheTypeK,
+                                             KvCacheType cacheTypeV,
+                                             LlmContextBudgetPolicy contextBudgetPolicy,
                                              Consumer<InferenceEvent> inferenceEventListener) throws Exception {
         device = DeviceSelector.normalize(device);
+        FlashAttentionMode effectiveFlashAttentionMode = flashAttentionMode != null ? flashAttentionMode : FlashAttentionMode.ENABLED;
+        LlmContextBudgetPolicy effectiveBudgetPolicy = contextBudgetPolicy != null ? contextBudgetPolicy : LlmContextBudgetPolicy.defaults();
+        PreflightPlans preflight = preflightContextPlans(
+                modelPath,
+                chatLaneConfig,
+                taskLaneConfig,
+                gpuLayers,
+                device,
+                effectiveFlashAttentionMode,
+                cacheTypeK,
+                cacheTypeV,
+                effectiveBudgetPolicy
+        );
+        requireRequestedContextAccepted(preflight.chatBudgetPlan(), InferenceLane.CHAT);
+        requireRequestedContextAccepted(preflight.taskBudgetPlan(), InferenceLane.TASK);
         LlamaCppModel model = loadModel("chat", modelPath, gpuLayers, device);
-        String resolvedModelProfile = resolveModelProfile(model, modelPath, modelProfile);
-        System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
-        LlamaEngine engine = new LlamaEngine("chat", model, chatLaneConfig, taskLaneConfig, gpuLayers, device, modelAlias, resolvedModelProfile, flashAttentionMode, cacheTypeK, cacheTypeV, taskSuspendOnChat, inferenceEventListener);
-        engine.startWorker();
-        return engine;
+        LlamaCppModel draftModel = null;
+        String resolvedDraftPath = null;
+        try {
+            resolvedDraftPath = resolveMtpDraftModelPath(mtpDraftModelPath);
+            if (resolvedDraftPath != null) {
+                draftModel = loadModel("chat-mtp-draft", resolvedDraftPath, gpuLayers, device);
+                System.out.println("[LlamaEngine:chat] External MTP draft loaded: " + resolvedDraftPath);
+            }
+            MtpDraftMaxCache.Key mtpDraftMaxCacheKey = MtpDraftMaxCache.key(modelPath, resolvedDraftPath, gpuLayers, device);
+            Integer cachedMtpDraftMax = MtpDraftMaxCache.loadRecommendedDraftMax(mtpDraftMaxCacheKey);
+            String resolvedModelProfile = resolveModelProfile(preflight.modelInfo(), modelPath, modelProfile);
+            System.out.println("[LlamaEngine:chat] Model profile: " + resolvedModelProfile);
+            LlamaEngine engine = new LlamaEngine(
+                    "chat",
+                    model,
+                    draftModel,
+                    mtpDraftMaxCacheKey,
+                    cachedMtpDraftMax,
+                    chatLaneConfig,
+                    taskLaneConfig,
+                    gpuLayers,
+                    device,
+                    modelAlias,
+                    resolvedModelProfile,
+                    effectiveFlashAttentionMode,
+                    cacheTypeK,
+                    cacheTypeV,
+                    effectiveBudgetPolicy,
+                    preflight.chatBudgetPlan(),
+                    preflight.taskBudgetPlan(),
+                    preflight.chatContextParams(),
+                    preflight.taskContextParams(),
+                    inferenceEventListener
+            );
+            engine.startWorker();
+            return engine;
+        } catch (Exception e) {
+            if (draftModel != null) try { draftModel.close(); } catch (Exception ignored) {}
+            try { model.close(); } catch (Exception ignored) {}
+            throw e;
+        }
     }
 
     private static LlamaCppModel loadModel(String engineName, String modelPath, int gpuLayers, String device) throws Exception {
@@ -164,9 +270,7 @@ public class LlamaEngine {
         System.out.println("[LlamaEngine:" + engineName + "] Loading model: " + modelPath);
         System.out.println("[LlamaEngine:" + engineName + "] GPU layers: " + gpuLayers);
         if (device != null) System.out.println("[LlamaEngine:" + engineName + "] Device: " + device);
-        var modelParams = LlamaCppModel.defaultModelParams()
-                .with(ModelParam.n_gpu_layers, gpuLayers);
-        if (device != null) modelParams = modelParams.with(ModelParam.device, device);
+        var modelParams = buildModelParams(gpuLayers, device);
         LlamaCppModel model = LlamaCppModel.loadAsync(mp, modelParams, progress -> {
             if (progress > 0) System.out.print("\r[LlamaEngine:" + engineName + "] Loading: " + (int) (progress * 100) + "%");
         }, null).get();
@@ -190,6 +294,23 @@ public class LlamaEngine {
         }
     }
 
+    private static int safeMtpLayerCount(LlamaCppModel model, LlamaCppModel draftModel) {
+        int targetLayers = safeMtpLayerCount(model);
+        if (targetLayers > 0 || draftModel == null) return targetLayers;
+        return safeMtpLayerCount(draftModel);
+    }
+
+    private static String resolveMtpDraftModelPath(String requestedDraftPath) throws Exception {
+        if (requestedDraftPath == null || requestedDraftPath.isBlank()) {
+            return null;
+        }
+        Path draftPath = Path.of(requestedDraftPath);
+        if (!Files.exists(draftPath)) {
+            throw new IllegalArgumentException("MTP draft model file not found: " + requestedDraftPath);
+        }
+        return draftPath.toString();
+    }
+
     private void startWorker() {
         inferenceExecutor.submit(new TaskExecutor(this));
         System.out.println("[LlamaEngine:" + engineName + "] Inference worker started.");
@@ -200,14 +321,14 @@ public class LlamaEngine {
         return modelProfile.trim().toLowerCase();
     }
 
-    private static String resolveModelProfile(LlamaCppModel model, String modelPath, String requestedProfile) {
+    private static String resolveModelProfile(LlamaCppModelInfo modelInfo, String modelPath, String requestedProfile) {
         String normalized = normalizeModelProfile(requestedProfile);
         if (!normalized.equals("auto")) return normalized;
 
         StringBuilder source = new StringBuilder();
         source.append(modelPath == null ? "" : modelPath).append('\n');
-        source.append(model.getDescription() == null ? "" : model.getDescription()).append('\n');
-        for (Map.Entry<String, String> entry : model.getMetadata().entrySet()) {
+        source.append(modelInfo.description() == null ? "" : modelInfo.description()).append('\n');
+        for (Map.Entry<String, String> entry : modelInfo.metadata().entrySet()) {
             source.append(entry.getKey()).append('=').append(entry.getValue()).append('\n');
         }
 
@@ -373,13 +494,13 @@ public class LlamaEngine {
     }
 
     boolean shouldSuspendTaskLane(InferenceTask currentTask) {
-        if (taskSuspendOnChat && pendingChatTasks.get() > 0) return true;
+        if (pendingChatTasks.get() > 0) return true;
         if (currentTask == null || !currentTask.isTaskPreemptible()) return false;
         return peekTaskPriority() > currentTask.getTaskPriority();
     }
 
     boolean shouldSuspendTaskLane() {
-        return taskSuspendOnChat && pendingChatTasks.get() > 0;
+        return pendingChatTasks.get() > 0;
     }
 
     void setCurrentLane(InferenceLane lane) {
@@ -399,13 +520,7 @@ public class LlamaEngine {
     }
 
     LlamaCppContext createContext(InferenceLane lane, InferenceOptions options) {
-        LaneConfig config = lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig;
-        ContextParams ctxParams = LlamaCppContext.defaultContextParams()
-                .with(ContextParam.n_ctx, config.getContextSize())
-                .with(ContextParam.n_threads, config.getThreadCount())
-                .with(ContextParam.flash_attn_type, flashAttentionMode.getJjmlType());
-        if (cacheTypeK != null) ctxParams = ctxParams.with(ContextParam.type_k, cacheTypeK.getGgmlType());
-        if (cacheTypeV != null) ctxParams = ctxParams.with(ContextParam.type_v, cacheTypeV.getGgmlType());
+        ContextParams ctxParams = getPlannedContextParams(lane);
         int draftMax = resolveMtpDraftMax(options);
         if (draftMax > 0) {
             ctxParams = SpeculativeParams.adjustTargetContextParams(ctxParams, draftMax);
@@ -424,7 +539,9 @@ public class LlamaEngine {
     }
 
     void recordMtpTrial(MtpTrialResult trial) {
-        mtpAutoTuner.record(trial);
+        if (mtpAutoTuner.record(trial)) {
+            MtpDraftMaxCache.saveRecommendedDraftMax(mtpDraftMaxCacheKey, trial);
+        }
     }
 
     PromptSnapshot promptSnapshot(List<LlamaCppChatMessage> messages, SamplerConfig config) {
@@ -458,15 +575,231 @@ public class LlamaEngine {
     public LaneConfig getTaskLaneConfig() { return taskLaneConfig; }
     public KvCacheType getCacheTypeK() { return cacheTypeK; }
     public KvCacheType getCacheTypeV() { return cacheTypeV; }
-    public boolean isTaskSuspendOnChat() { return taskSuspendOnChat; }
+    LlmContextBudgetPolicy getContextBudgetPolicy() { return contextBudgetPolicy; }
     public boolean isRunning() { return running; }
 
     public boolean supportsEnableThinking() {
         return model.supportsEnableThinking();
     }
 
+    public LlmRuntimeCapabilities getRuntimeCapabilities() {
+        try {
+            return new LlmRuntimeCapabilities(
+                    running && isModelLoaded(),
+                    safeSupportsEnableThinking(),
+                    supportsMtpInternal(),
+                    safeSupportsMtp(model),
+                    hasExternalMtpDraftModel(),
+                    getMtpLayerCount()
+            );
+        } catch (RuntimeException e) {
+            return LlmRuntimeCapabilities.unavailable();
+        }
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan() {
+        return getContextBudgetPlan(InferenceLane.CHAT);
+    }
+
+    public LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane) {
+        return lane == InferenceLane.TASK ? taskContextBudgetPlan : chatContextBudgetPlan;
+    }
+
+    int getPlannedContextSize(InferenceLane lane) {
+        LlmContextBudgetPlan plan = getContextBudgetPlan(lane);
+        return plan.plannedContextSize() > 0 ? plan.plannedContextSize()
+                : (lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig).getContextSize();
+    }
+
+    private ContextParams getPlannedContextParams(InferenceLane lane) {
+        ContextParams params = lane == InferenceLane.TASK ? taskContextParams : chatContextParams;
+        if (params != null) return params;
+        LaneConfig config = lane == InferenceLane.TASK ? taskLaneConfig : chatLaneConfig;
+        return buildContextParams(
+                config,
+                getPlannedContextSize(lane),
+                flashAttentionMode,
+                cacheTypeK,
+                cacheTypeV
+        );
+    }
+
+    private boolean safeSupportsEnableThinking() {
+        try {
+            return model.supportsEnableThinking();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static org.argeo.jjml.llm.params.ModelParams buildModelParams(int gpuLayers, String device) {
+        var modelParams = LlamaCppModel.defaultModelParams()
+                .with(ModelParam.n_gpu_layers, gpuLayers);
+        if (device != null) modelParams = modelParams.with(ModelParam.device, device);
+        return modelParams;
+    }
+
+    private static ContextParams buildContextParams(LaneConfig config,
+                                                    int contextSize,
+                                                    FlashAttentionMode flashAttentionMode,
+                                                    KvCacheType cacheTypeK,
+                                                    KvCacheType cacheTypeV) {
+        ContextParams params = LlamaCppContext.defaultContextParams()
+                .with(ContextParam.n_ctx, contextSize)
+                .with(ContextParam.n_threads, config.getThreadCount())
+                .with(ContextParam.flash_attn_type, flashAttentionMode.getJjmlType());
+        if (cacheTypeK != null) params = params.with(ContextParam.type_k, cacheTypeK.getGgmlType());
+        if (cacheTypeV != null) params = params.with(ContextParam.type_v, cacheTypeV.getGgmlType());
+        return params;
+    }
+
+    public static LlmContextBudgetPlan dryRunContextBudget(String modelPath,
+                                                           int contextSize,
+                                                           int threadCount,
+                                                           int gpuLayers,
+                                                           String device,
+                                                           FlashAttentionMode flashAttentionMode,
+                                                           KvCacheType cacheTypeK,
+                                                           KvCacheType cacheTypeV,
+                                                           LlmContextBudgetPolicy policy) throws Exception {
+        device = DeviceSelector.normalize(device);
+        FlashAttentionMode effectiveFlashAttentionMode = flashAttentionMode != null ? flashAttentionMode : FlashAttentionMode.ENABLED;
+        LlmContextBudgetPolicy effectivePolicy = policy != null ? policy : LlmContextBudgetPolicy.defaults();
+        LaneConfig laneConfig = new LaneConfig(InferenceLane.CHAT, contextSize, threadCount, 1);
+        Path path = Path.of(modelPath);
+        if (!Files.exists(path)) {
+            throw new IllegalArgumentException("Model file not found: " + modelPath);
+        }
+        LlamaCppContextPlan plan = LlamaCppModel.planContext(
+                path,
+                buildModelParams(gpuLayers, device),
+                buildContextParams(laneConfig, contextSize, effectiveFlashAttentionMode, cacheTypeK, cacheTypeV)
+        );
+        return toBudgetPlan(plan, laneConfig, effectivePolicy);
+    }
+
+    private static PreflightPlans preflightContextPlans(String modelPath,
+                                                        LaneConfig chatLaneConfig,
+                                                        LaneConfig taskLaneConfig,
+                                                        int gpuLayers,
+                                                        String device,
+                                                        FlashAttentionMode flashAttentionMode,
+                                                        KvCacheType cacheTypeK,
+                                                        KvCacheType cacheTypeV,
+                                                        LlmContextBudgetPolicy policy) throws Exception {
+        Path path = Path.of(modelPath);
+        if (!Files.exists(path)) {
+            throw new IllegalArgumentException("Model file not found: " + modelPath);
+        }
+        var modelParams = buildModelParams(gpuLayers, device);
+        LlamaCppContextPlan chatPlan = LlamaCppModel.planContext(
+                path,
+                modelParams,
+                buildContextParams(chatLaneConfig, chatLaneConfig.getContextSize(), flashAttentionMode, cacheTypeK, cacheTypeV)
+        );
+        LlamaCppContextPlan taskPlan = LlamaCppModel.planContext(
+                path,
+                modelParams,
+                buildContextParams(taskLaneConfig, taskLaneConfig.getContextSize(), flashAttentionMode, cacheTypeK, cacheTypeV)
+        );
+        return new PreflightPlans(
+                chatPlan.modelInfo(),
+                toBudgetPlan(chatPlan, chatLaneConfig, policy),
+                toBudgetPlan(taskPlan, taskLaneConfig, policy),
+                chatPlan.contextParams(),
+                taskPlan.contextParams()
+        );
+    }
+
+    private static void requireRequestedContextAccepted(LlmContextBudgetPlan plan, InferenceLane lane) {
+        if (plan == null || !plan.reliable()) return;
+        if (plan.plannedContextSize() == plan.requestedContextSize()) return;
+        throw new IllegalArgumentException(lane.wireName() + " requested context size "
+                + plan.requestedContextSize()
+                + " exceeds dryrun planned context size "
+                + plan.plannedContextSize()
+                + "; run dryRunContextBudget first and pass the returned plannedContextSize as contextSize");
+    }
+
+    private static LlmContextBudgetPlan toBudgetPlan(LlamaCppContextPlan plan,
+                                                     LaneConfig config,
+                                                     LlmContextBudgetPolicy policy) {
+        LlamaCppDevice device = primaryDevice(plan.devices());
+        long freeBytes = device == null ? -1L : device.memoryFree();
+        long kvBytesPerToken = plan.kvCacheBytesPerToken();
+        long fixedDeviceBytes = fixedDeviceBytes(plan.deviceBytes(), plan.kvCacheBytes());
+        int memoryContextSize = estimateMemoryContextSize(freeBytes, policy.safetyMarginBytes(), fixedDeviceBytes, kvBytesPerToken);
+        boolean planHasContext = plan.contextSize() > 0;
+        boolean reliable = planHasContext || (kvBytesPerToken > 0L && memoryContextSize > 0);
+        int requestedContextSize = config.getContextSize();
+        int plannedContextSize = planHasContext
+                ? Math.min(requestedContextSize, plan.contextSize())
+                : reliable
+                ? Math.min(requestedContextSize, memoryContextSize)
+                : requestedContextSize;
+        int promptTokenBudget = Math.max(0, plannedContextSize - policy.promptMarginTokens());
+        String limitation = reliable ? "" : "device memory or context preflight estimate is unavailable";
+        return new LlmContextBudgetPlan(
+                requestedContextSize,
+                plan.contextTrainingSize(),
+                memoryContextSize,
+                plannedContextSize,
+                promptTokenBudget,
+                policy.promptMarginTokens(),
+                policy.safetyMarginBytes(),
+                reliable,
+                limitation
+        );
+    }
+
+    private static long fixedDeviceBytes(long deviceBytes, long kvCacheBytes) {
+        if (deviceBytes < 0L || kvCacheBytes < 0L) return -1L;
+        return Math.max(0L, deviceBytes - kvCacheBytes);
+    }
+
+    private static int estimateMemoryContextSize(long freeBytes, long safetyMarginBytes, long fixedDeviceBytes, long kvBytesPerToken) {
+        if (freeBytes < 0L || kvBytesPerToken <= 0L) return -1;
+        long available = freeBytes - Math.max(0L, safetyMarginBytes);
+        if (fixedDeviceBytes > 0L) available -= fixedDeviceBytes;
+        if (available <= 0L) return 0;
+        return available > Integer.MAX_VALUE * kvBytesPerToken
+                ? Integer.MAX_VALUE
+                : (int) (available / kvBytesPerToken);
+    }
+
+    private static LlamaCppDevice primaryDevice(LlamaCppDevice[] devices) {
+        if (devices == null || devices.length == 0) return null;
+        for (LlamaCppDevice candidate : devices) {
+            if (candidate != null && candidate.memoryTotal() > 0L) {
+                return candidate;
+            }
+        }
+        return devices[0];
+    }
+
+    private record PreflightPlans(
+            LlamaCppModelInfo modelInfo,
+            LlmContextBudgetPlan chatBudgetPlan,
+            LlmContextBudgetPlan taskBudgetPlan,
+            ContextParams chatContextParams,
+            ContextParams taskContextParams
+    ) {
+    }
+
     public boolean supportsMtp() {
         return mtpAutoTuner.isSupported();
+    }
+
+    boolean supportsEmbeddedMtp() {
+        return safeSupportsMtp(model);
+    }
+
+    boolean hasExternalMtpDraftModel() {
+        return mtpDraftModel != null;
+    }
+
+    LlamaCppModel getMtpDraftModel() {
+        return mtpDraftModel;
     }
 
     public int getMtpLayerCount() {
@@ -529,6 +862,9 @@ public class LlamaEngine {
             Thread.currentThread().interrupt();
         }
         if (terminated) {
+            if (mtpDraftModel != null) {
+                try { mtpDraftModel.close(); } catch (Exception ignored) {}
+            }
             try { model.close(); } catch (Exception ignored) {}
             System.out.println("[LlamaEngine:" + engineName + "] Shutdown complete.");
         } else {
