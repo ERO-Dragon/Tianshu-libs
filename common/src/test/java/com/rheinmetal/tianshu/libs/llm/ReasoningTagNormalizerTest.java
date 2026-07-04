@@ -16,6 +16,8 @@ class ReasoningTagNormalizerTest {
                 result.text()
         );
         assertEquals("hidden", result.thinkingContent());
+        assertEquals(true, result.completionContent());
+        assertEquals(true, result.thinkingToken());
 
         assertEquals(
                 "",
@@ -50,10 +52,10 @@ class ReasoningTagNormalizerTest {
     @Test
     void normalizesTagsSplitAcrossStreamingTokens() {
         ReasoningTagNormalizer normalizer = new ReasoningTagNormalizer(true);
-        ReasoningTagNormalizer.AcceptResult first = normalizer.acceptWithUsage("a <reas");
-        ReasoningTagNormalizer.AcceptResult second = normalizer.acceptWithUsage("oning>b</reas");
-        ReasoningTagNormalizer.AcceptResult third = normalizer.acceptWithUsage("oning> c");
-        ReasoningTagNormalizer.AcceptResult end = normalizer.finishWithUsage();
+        ReasoningTagNormalizer.AcceptResult first = normalizer.acceptNormalized("a <reas");
+        ReasoningTagNormalizer.AcceptResult second = normalizer.acceptNormalized("oning>b</reas");
+        ReasoningTagNormalizer.AcceptResult third = normalizer.acceptNormalized("oning> c");
+        ReasoningTagNormalizer.AcceptResult end = normalizer.finishNormalized();
 
         assertEquals("a  c", first.text() + second.text() + third.text() + end.text());
         assertEquals("b", first.thinkingContent() + second.thinkingContent() + third.thinkingContent() + end.thinkingContent());
@@ -63,10 +65,28 @@ class ReasoningTagNormalizerTest {
     void streamsNonEmptyReasoningBeforeCloseTag() {
         ReasoningTagNormalizer normalizer = new ReasoningTagNormalizer(true);
 
-        assertEquals("", normalizer.acceptWithUsage("<reasoning>\n").thinkingContent());
-        assertEquals("\nwork", normalizer.acceptWithUsage("work").thinkingContent());
-        assertEquals(" more", normalizer.acceptWithUsage(" more").thinkingContent());
-        assertEquals("", normalizer.acceptWithUsage("</reasoning>").thinkingContent());
+        assertEquals("", normalizer.acceptNormalized("<reasoning>\n").thinkingContent());
+        assertEquals("\nwork", normalizer.acceptNormalized("work").thinkingContent());
+        assertEquals(" more", normalizer.acceptNormalized(" more").thinkingContent());
+        assertEquals("", normalizer.acceptNormalized("</reasoning>").thinkingContent());
+    }
+
+    @Test
+    void supportsGenerationStartingInsidePromptReasoningBlock() {
+        ReasoningTagNormalizer normalizer = new ReasoningTagNormalizer(true, true);
+
+        assertEquals("work", normalizer.acceptNormalized("work").thinkingContent());
+        ReasoningTagNormalizer.AcceptResult accepted = normalizer.acceptNormalized("</think>\nanswer");
+        assertEquals("", accepted.thinkingContent());
+        assertEquals("\nanswer", accepted.text());
+        assertEquals("", normalizer.finishNormalized().text());
+    }
+
+    @Test
+    void detectsPromptEndingInOpenReasoningBlock() {
+        assertEquals(true, ReasoningTagNormalizer.promptEndsInReasoningOpen("<|im_start|>assistant\n<think>\n"));
+        assertEquals(false, ReasoningTagNormalizer.promptEndsInReasoningOpen("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+        assertEquals(false, ReasoningTagNormalizer.promptEndsInReasoningOpen("<|im_start|>assistant\n"));
     }
 
     @Test
@@ -110,12 +130,13 @@ class ReasoningTagNormalizerTest {
     }
 
     private static ReasoningTagNormalizer.AcceptResult acceptAll(ReasoningTagNormalizer normalizer, String text) {
-        ReasoningTagNormalizer.AcceptResult accepted = normalizer.acceptWithUsage(text);
-        ReasoningTagNormalizer.AcceptResult finished = normalizer.finishWithUsage();
+        ReasoningTagNormalizer.AcceptResult accepted = normalizer.acceptNormalized(text);
+        ReasoningTagNormalizer.AcceptResult finished = normalizer.finishNormalized();
         return new ReasoningTagNormalizer.AcceptResult(
                 accepted.text() + finished.text(),
                 accepted.thinkingContent() + finished.thinkingContent(),
-                accepted.visibleCompletion() || finished.visibleCompletion()
+                accepted.completionContent() || finished.completionContent(),
+                accepted.thinkingToken() || finished.thinkingToken()
         );
     }
 }

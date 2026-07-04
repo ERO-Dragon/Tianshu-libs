@@ -153,9 +153,7 @@ public class ManualProductionSmoke {
                 + " contextRemainder=" + contextRemainder
                 + " plannedContext=" + plannedContextSize
                 + " promptMargin=" + promptMargin);
-        System.out.println("taskThinkingUnbounded.usage prompt=" + result.usage().promptTokens()
-                + " completion=" + result.usage().completionTokens()
-                + " total=" + result.usage().totalTokens());
+        System.out.println("taskThinkingUnbounded.usage " + usageLine(result.usage()));
     }
 
     private static void verifyInvalidSamplerRejected(JavaLlamaServer service) throws Exception {
@@ -253,8 +251,7 @@ public class ManualProductionSmoke {
         if (completed == null || completed.type() != StreamFinishType.COMPLETED) {
             throw new IllegalStateException("task finish should be COMPLETED");
         }
-        System.out.println("coldResume.usage prompt=" + result.usage().promptTokens()
-                + " completion=" + result.usage().completionTokens());
+        System.out.println("coldResume.usage " + usageLine(result.usage()));
     }
 
     private static void verifyRequestMtpInference(JavaLlamaServer service, SmokeConfig config) throws Exception {
@@ -289,8 +286,7 @@ public class ManualProductionSmoke {
         requireUsable("mtp long request", longResult.text());
         MtpCapability capability = service.getMtpCapability();
         System.out.println("mtp.request.text=" + compact(result.text()));
-        System.out.println("mtp.longRequest.usage prompt=" + longResult.usage().promptTokens()
-                + " completion=" + longResult.usage().completionTokens());
+        System.out.println("mtp.longRequest.usage " + usageLine(longResult.usage()));
         System.out.println("mtp.capability calibrated=" + capability.isCalibrated()
                 + " recommendedDraftMax=" + capability.getRecommendedDraftMax());
         if (capability.isCalibrated() && capability.getBestTrial() != null) {
@@ -380,6 +376,14 @@ public class ManualProductionSmoke {
 
     private static String compact(String text) {
         return text == null ? "" : text.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String usageLine(LlmTokenUsage usage) {
+        return "prompt=" + usage.promptTokens()
+                + " completion=" + usage.completionTokens()
+                + " thinking=" + usage.thinkingTokens()
+                + " output=" + usage.outputTokens()
+                + " total=" + usage.totalTokens();
     }
 
     @FunctionalInterface

@@ -308,6 +308,10 @@ public class JavaLlamaServer {
         return requireLibsApi().countChatPromptTokens(messages, sampler);
     }
 
+    public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler, InferenceOptions options) {
+        return requireLibsApi().countChatPromptTokens(messages, sampler, options);
+    }
+
     public float[] embed(String text) throws Exception {
         return requireLibsApi().embed(text);
     }

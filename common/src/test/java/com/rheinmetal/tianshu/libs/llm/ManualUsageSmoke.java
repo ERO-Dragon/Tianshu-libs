@@ -204,10 +204,7 @@ public class ManualUsageSmoke {
         if (cancelled.type() != StreamFinishType.CANCELLED) {
             throw new IllegalStateException("chat cancel finish type should be CANCELLED: " + cancelled.type());
         }
-        System.out.println("cancel.chatStream.usage prompt="
-                + cancelled.usage().promptTokens()
-                + " completion=" + cancelled.usage().completionTokens()
-                + " total=" + cancelled.usage().totalTokens());
+        System.out.println("cancel.chatStream.usage " + usageLine(cancelled.usage()));
     }
 
     private static void runTaskCancellation(JavaLlamaServer service, SamplerConfig sampler) throws Exception {
@@ -243,10 +240,7 @@ public class ManualUsageSmoke {
         if (cancelled.type() != StreamFinishType.CANCELLED) {
             throw new IllegalStateException("cancel finish type should be CANCELLED: " + cancelled.type());
         }
-        System.out.println("cancel.taskStreamWithUsage.usage prompt="
-                + cancelled.usage().promptTokens()
-                + " completion=" + cancelled.usage().completionTokens()
-                + " total=" + cancelled.usage().totalTokens());
+        System.out.println("cancel.taskStreamWithUsage.usage " + usageLine(cancelled.usage()));
     }
 
     private static void runQueuedCancellation(JavaLlamaServer service, SamplerConfig sampler) throws Exception {
@@ -302,10 +296,7 @@ public class ManualUsageSmoke {
         } catch (CancellationException expected) {
             // expected cleanup
         }
-        System.out.println("queued.cancel.usage prompt="
-                + finish.usage().promptTokens()
-                + " completion=" + finish.usage().completionTokens()
-                + " total=" + finish.usage().totalTokens());
+        System.out.println("queued.cancel.usage " + usageLine(finish.usage()));
     }
 
     private static void assertUsage(String label, int expectedPromptTokens, LlmTokenUsage usage) {
@@ -316,10 +307,10 @@ public class ManualUsageSmoke {
             throw new IllegalStateException(label + " promptTokens mismatch: expected="
                     + expectedPromptTokens + ", actual=" + usage.promptTokens());
         }
-        if (usage.completionTokens() <= 0) {
-            throw new IllegalStateException(label + " completionTokens should be positive: " + usage.completionTokens());
+        if (usage.outputTokens() <= 0) {
+            throw new IllegalStateException(label + " outputTokens should be positive: " + usage.outputTokens());
         }
-        if (usage.totalTokens() != usage.promptTokens() + usage.completionTokens()) {
+        if (usage.totalTokens() != usage.promptTokens() + usage.outputTokens()) {
             throw new IllegalStateException(label + " totalTokens mismatch");
         }
     }
@@ -352,8 +343,8 @@ public class ManualUsageSmoke {
     }
 
     private static void printUsage(String label, LlmTokenUsage usage) {
-        System.out.printf("%s.usage prompt=%d completion=%d total=%d%n",
-                label, usage.promptTokens(), usage.completionTokens(), usage.totalTokens());
+        System.out.printf("%s.usage prompt=%d completion=%d thinking=%d output=%d total=%d%n",
+                label, usage.promptTokens(), usage.completionTokens(), usage.thinkingTokens(), usage.outputTokens(), usage.totalTokens());
     }
 
     private static void writeResult(PrintWriter output, String label, LlmGenerationResult result) {
@@ -379,6 +370,8 @@ public class ManualUsageSmoke {
     private static String usageLine(LlmTokenUsage usage) {
         return "prompt=" + usage.promptTokens()
                 + ", completion=" + usage.completionTokens()
+                + ", thinking=" + usage.thinkingTokens()
+                + ", output=" + usage.outputTokens()
                 + ", total=" + usage.totalTokens();
     }
 

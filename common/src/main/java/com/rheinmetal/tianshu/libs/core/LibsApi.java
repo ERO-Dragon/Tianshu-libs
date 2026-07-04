@@ -224,8 +224,12 @@ public class LibsApi {
     }
 
     public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler) {
+        return countChatPromptTokens(messages, sampler, null);
+    }
+
+    public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler, InferenceOptions options) {
         List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
-        return chatEngine.countChatPromptTokens(llamaMessages, sampler);
+        return chatEngine.countChatPromptTokens(llamaMessages, sampler, options);
     }
 
     public boolean supportsMtp() {

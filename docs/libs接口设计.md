@@ -204,7 +204,7 @@ public enum InferenceEventType {
 - 空思考块会被清洗掉，例如 `<think></think>`、`<think>\n\n</think>` 或 no-think 标记块，不再返回给上层。
 - 流式输出使用两个通道：`onToken` 只接收正式正文 token；可选 `onThinking` 只接收思考内容 token。`LlmStreamFinish.thinkingContent()` 会带最终汇总，便于上层兜底和落盘。
 - `enableThinking` / `ThinkingMode` 仍然只是生成前的模板控制；输出归一化是生成后的统一兼容层，二者互不改变对外 API。
-- `LlmGenerationResult.text()` 是正式正文，`thinkingContent()` 是可选捕获的思考内容。`LlmTokenUsage.completionTokens` 只统计正式正文 token；被识别为思考包裹内的 token 不计入 completion。
+- `LlmGenerationResult.text()` 是正式正文，`thinkingContent()` 是可选捕获的思考内容。`LlmTokenUsage.completionTokens` 只统计正式正文 token；被识别为思考包裹内的 token 计入 `thinkingTokens`，不计入 completion。
 
 ### 2.1.3 请求级运行选项
 
@@ -229,6 +229,7 @@ String reply = service.chat(messages, sampler, 256, options).get();
 | `mtpDraftMax` | null | 本轮请求指定 draft token 窗口；null 表示使用自动校准出的推荐值 |
 | `vulkanPriority` | null | Vulkan 时间片推理优先级；null 表示不改动底层调度状态 |
 | `captureThinkingContent` | false | 是否把已识别的思考内容返回到结构化 thinking 通道；false 时仍正常生成和计 usage，但丢弃思考内容 |
+| `toolsJson` | null | 本轮请求的 OpenAI-style function tools JSON；支持单个 function tool 对象、function tool 数组或 `{ "tools": [...] }` 包装对象 |
 
 说明：
 
@@ -289,8 +290,58 @@ MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exceptio
 - 默认校准使用 `maxDraftMax=0` 自动扫描：先测试保守初始范围；如果最佳 `draftMax` 贴近当前扫描边界，再逐步扩大范围，直到最佳值不再贴边、MTP 初始化失败或达到硬安全上限。
 - `maxDraftMax > 0` 表示高级调用手动指定扫描上限；这个上限是校准预算，不是模型能力上限。
 - 校准按 tokens/s 选择当前最优值，并缓存到当前 `LlamaEngine`。
-- `InferenceOptions.builder().mtpEnabled(true).build()` 未指定 `mtpDraftMax` 时，会使用缓存的推荐值；未校准时使用默认 `draftMax=3`。
-- 校准结果只保存在当前进程/当前引擎内；如果上层希望跨启动复用，需要自行持久化策略和环境信息。
+- `InferenceOptions.builder().mtpEnabled(true).build()` 未指定 `mtpDraftMax` 时，会使用缓存的推荐值；未校准且无缓存时使用默认 `draftMax=1`。
+- 校准结果会写入 libs 内部 MTP 缓存；上层不需要透传或持久化推荐 `draftMax`。
+
+### 2.1.5 请求级 tools 模板透传
+
+libs 不实现 function calling 编排，也不执行工具。上层如果需要按 llama.cpp / chat template 的 `tools` 变量传入工具定义，可以把 OpenAI-style function tools JSON 放入 `InferenceOptions.toolsJson(...)`。支持多个工具，推荐上层传 function tool 数组。
+
+```java
+InferenceOptions options = InferenceOptions.builder()
+    .toolsJson(
+    """
+    [
+      {
+        "type": "function",
+        "function": {
+          "name": "load_skill",
+          "description": "Load one skill detail by id.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "skill_id": { "type": "string" }
+            },
+            "required": ["skill_id"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "query_state",
+          "description": "Query current runtime state.",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      }
+    ]
+    """
+    )
+    .build();
+
+LlmGenerationResult result = service.chatWithUsage(messages, sampler, 0, options).get();
+String output = result.text(); // 上层自行解析模型输出的工具调用文本或目标 JSON。
+```
+
+实现语义：
+
+- 如果当前模型 chat template 报告支持 tools，libs 会把 OpenAI-style function tools 解析为 JJML 的 `LlamaCppChatTool` 列表，并通过 `formatChatMessagesJinjaFull(...)` 传入模板的顶层 `tools` 变量。
+- 如果模型不支持 tools，或 `toolsJson` 不是可解析的 OpenAI-style function tools 声明，libs 会把原始 JSON 作为末尾普通 user 消息的 `<tools>...</tools>` 块拼入 prompt，保证信息不会丢失。
+- 如果上层同时设置 `SamplerConfig.chatTemplateKwargs.tools` 和 `InferenceOptions.toolsJson`，libs 抛出 `IllegalArgumentException`，避免同一语义被传两份。
+- libs 不解析模型输出、不执行工具，也不维护 tool 注册表；上层仍负责根据模型输出 JSON 执行下一步。
 
 ### 2.2 向量
 
@@ -409,8 +460,9 @@ public class RagSearchResult {
 ### 3.4 LLM usage 相关结构
 
 ```java
-public record LlmTokenUsage(int promptTokens, int completionTokens) {
-    public int totalTokens(); // promptTokens + completionTokens
+public record LlmTokenUsage(int promptTokens, int completionTokens, int thinkingTokens) {
+    public int outputTokens(); // completionTokens + thinkingTokens
+    public int totalTokens();  // promptTokens + outputTokens()
 }
 
 public record LlmGenerationResult(String text, LlmTokenUsage usage, String thinkingContent) {
@@ -430,7 +482,9 @@ public enum StreamFinishType {
 
 - `promptTokens`：实际 chat template 渲染后的 prompt token 数。
 - `completionTokens`：模型实际生成且归一化后对上层可见的回答 token 数；识别出的 COT token 不计入。
-- `totalTokens()`：`promptTokens + completionTokens`。
+- `thinkingTokens`：模型实际生成且被归一化为 COT/thinking 通道的 token 数。由于部分模型会把标签边界和内容合并到同一 token，边界处允许 1-2 个 token 的近似误差。
+- `outputTokens()`：`completionTokens + thinkingTokens`。
+- `totalTokens()`：`promptTokens + outputTokens()`。
 - `text`：正式正文，不包含已识别的思考包裹内容。
 - `thinkingContent`：当 `captureThinkingContent(true)` 时返回已识别的思考内容；否则为空字符串。
 - 非流式 `chatWithUsage` / `taskWithUsage` 成功完成时通过 `LlmGenerationResult` 返回 usage 和可选 thinking 汇总。
@@ -469,6 +523,7 @@ public final class InferenceOptions {
     public Integer getMtpDraftMax();
     public Float getVulkanPriority();
     public boolean isCaptureThinkingContent();
+    public String getToolsJson();
 }
 ```
 
@@ -476,6 +531,7 @@ public final class InferenceOptions {
 
 - `captureThinkingContent(false)`：默认值；libs 会识别并移除正文中的思考包裹内容，但不保存 COT。
 - `captureThinkingContent(true)`：把识别出的思考内容写入 `LlmGenerationResult.thinkingContent()`；流式请求同时通过 `onThinking` 增量返回，并在 `LlmStreamFinish.thinkingContent()` 汇总。
+- `toolsJson(String)`：设置本轮 OpenAI-style function tools JSON；模型支持 tools 时作为顶层 `tools` 变量传入，否则以 `<tools>...</tools>` 末尾文本块兜底；libs 不解析模型输出。
 
 ### 3.7 MTP 相关结构
 

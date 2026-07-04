@@ -545,12 +545,20 @@ public class LlamaEngine {
     }
 
     PromptSnapshot promptSnapshot(List<LlamaCppChatMessage> messages, SamplerConfig config) {
+        return promptSnapshot(messages, config, null);
+    }
+
+    PromptSnapshot promptSnapshot(List<LlamaCppChatMessage> messages, SamplerConfig config, InferenceOptions options) {
         synchronized (model) {
-            return ChatPromptTemplate.snapshot(model, messages, config);
+            return ChatPromptTemplate.snapshot(model, messages, config, options);
         }
     }
 
     public int countChatPromptTokens(List<LlamaCppChatMessage> messages, SamplerConfig config) {
+        return countChatPromptTokens(messages, config, null);
+    }
+
+    public int countChatPromptTokens(List<LlamaCppChatMessage> messages, SamplerConfig config, InferenceOptions options) {
         if (!running) throw new IllegalStateException("Engine is shutting down");
         if (messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("messages cannot be null or empty");
@@ -558,7 +566,7 @@ public class LlamaEngine {
         SamplerConfig effectiveConfig = config != null ? config.copy() : new SamplerConfig();
         effectiveConfig.validate();
         synchronized (model) {
-            return ChatPromptTemplate.countTokens(model, messages, effectiveConfig);
+            return ChatPromptTemplate.countTokens(model, messages, effectiveConfig, options);
         }
     }
 

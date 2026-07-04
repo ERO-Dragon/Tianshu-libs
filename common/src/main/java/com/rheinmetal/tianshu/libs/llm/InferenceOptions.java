@@ -12,12 +12,14 @@ public final class InferenceOptions {
     private final Integer mtpDraftMax;
     private final Float vulkanPriority;
     private final boolean captureThinkingContent;
+    private final String toolsJson;
 
     private InferenceOptions(Builder builder) {
         this.mtpEnabled = builder.mtpEnabled;
         this.mtpDraftMax = builder.mtpDraftMax;
         this.vulkanPriority = builder.vulkanPriority;
         this.captureThinkingContent = builder.captureThinkingContent;
+        this.toolsJson = normalizeToolsJson(builder.toolsJson);
     }
 
     public static InferenceOptions defaults() {
@@ -38,6 +40,7 @@ public final class InferenceOptions {
                 .mtpDraftMax(mtpDraftMax)
                 .vulkanPriority(vulkanPriority)
                 .captureThinkingContent(captureThinkingContent)
+                .toolsJson(toolsJson)
                 .build();
     }
 
@@ -57,11 +60,16 @@ public final class InferenceOptions {
         return captureThinkingContent;
     }
 
+    public String getToolsJson() {
+        return toolsJson;
+    }
+
     public static final class Builder {
         private boolean mtpEnabled;
         private Integer mtpDraftMax;
         private Float vulkanPriority;
         private boolean captureThinkingContent;
+        private String toolsJson;
 
         private Builder() {
         }
@@ -92,8 +100,19 @@ public final class InferenceOptions {
             return this;
         }
 
+        public Builder toolsJson(String value) {
+            this.toolsJson = value;
+            return this;
+        }
+
         public InferenceOptions build() {
             return new InferenceOptions(this);
         }
+    }
+
+    private static String normalizeToolsJson(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 }

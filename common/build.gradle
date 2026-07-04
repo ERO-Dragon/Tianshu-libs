@@ -27,6 +27,7 @@ dependencies {
 
     testImplementation platform("org.junit:junit-bom:${junit_version}")
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly "com.google.code.gson:gson:${gson_version}"
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testRuntimeOnly "org.slf4j:slf4j-simple:${slf4j_version}"
 
@@ -157,6 +158,37 @@ tasks.register('manualProductionSmoke', JavaExec) {
     systemProperty 'tianshu.llm.safetyMarginBytes', System.getProperty('tianshu.llm.safetyMarginBytes', "${512L * 1024L * 1024L}")
     systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
     systemProperty 'tianshu.embedding.device', System.getProperty('tianshu.embedding.device', '')
+}
+
+tasks.register('manualToolsJsonMatrixSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Runs a production-like Chinese matrix smoke for toolsJson, long prompts, COT, streaming, and task lane.'
+    workingDir = rootProject.projectDir
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualToolsJsonMatrixSmoke'
+    systemProperty 'tianshu.tools.models', System.getProperty(
+            'tianshu.tools.models',
+            'D:\\Minecraft\\Models\\qwen3.5-2B-MTP-unsloth\\Qwen3.5-2B-Q4_K_M.gguf;D:\\Minecraft\\Models\\gemmaE4B-MTP-unsloth\\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'
+    )
+    systemProperty 'tianshu.tools.targets', System.getProperty('tianshu.tools.targets', '500,1500,3000')
+    systemProperty 'tianshu.tools.maxTokens', System.getProperty('tianshu.tools.maxTokens', '512')
+    systemProperty 'tianshu.tools.outputChars', System.getProperty('tianshu.tools.outputChars', '240')
+    systemProperty 'tianshu.tools.output', System.getProperty('tianshu.tools.output', 'build/reports/manual-tools-json-matrix-smoke.txt')
+    systemProperty 'tianshu.tools.sampler.nonThinking.temperature', System.getProperty('tianshu.tools.sampler.nonThinking.temperature', '')
+    systemProperty 'tianshu.tools.sampler.nonThinking.topK', System.getProperty('tianshu.tools.sampler.nonThinking.topK', '')
+    systemProperty 'tianshu.tools.sampler.nonThinking.topP', System.getProperty('tianshu.tools.sampler.nonThinking.topP', '')
+    systemProperty 'tianshu.tools.sampler.nonThinking.minP', System.getProperty('tianshu.tools.sampler.nonThinking.minP', '')
+    systemProperty 'tianshu.tools.sampler.nonThinking.penaltyPresent', System.getProperty('tianshu.tools.sampler.nonThinking.penaltyPresent', '')
+    systemProperty 'tianshu.tools.sampler.thinking.temperature', System.getProperty('tianshu.tools.sampler.thinking.temperature', '')
+    systemProperty 'tianshu.tools.sampler.thinking.topK', System.getProperty('tianshu.tools.sampler.thinking.topK', '')
+    systemProperty 'tianshu.tools.sampler.thinking.topP', System.getProperty('tianshu.tools.sampler.thinking.topP', '')
+    systemProperty 'tianshu.tools.sampler.thinking.minP', System.getProperty('tianshu.tools.sampler.thinking.minP', '')
+    systemProperty 'tianshu.tools.sampler.thinking.penaltyPresent', System.getProperty('tianshu.tools.sampler.thinking.penaltyPresent', '')
+    systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '8192')
+    systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
+    systemProperty 'tianshu.llm.chatThreads', System.getProperty('tianshu.llm.chatThreads', '4')
+    systemProperty 'tianshu.llm.taskThreads', System.getProperty('tianshu.llm.taskThreads', '2')
+    systemProperty 'tianshu.llm.device', System.getProperty('tianshu.llm.device', '')
 }
 
 def generateNativeManifest = tasks.register('generateNativeManifest') {

@@ -265,24 +265,27 @@ public class TaskExecutor implements Runnable {
             StringBuilder fullResponse = new StringBuilder();
             StringBuilder thinkingContent = new StringBuilder();
             ReasoningTagNormalizer reasoningNormalizer = new ReasoningTagNormalizer(
-                    task.getInferenceOptions().isCaptureThinkingContent()
+                    task.getInferenceOptions().isCaptureThinkingContent(),
+                    prompt.generationStartsInReasoning()
             );
             int generatedTokens = 0;
             int completionTokens = 0;
+            int thinkingTokens = 0;
             while (generatedTokens < completionLimit) {
                 if (task.isCancelled()) break;
                 int remaining = completionLimit - generatedTokens;
                 GeneratedToken generated = generator.next(remaining);
                 if (generated == null) break;
                 generatedTokens++;
-                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(generated.text());
-                if (accepted.visibleCompletion()) completionTokens++;
+                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptNormalized(generated.text());
+                if (accepted.countAsThinkingToken()) thinkingTokens++;
+                if (accepted.countAsCompletionToken()) completionTokens++;
                 appendAccepted(task, fullResponse, thinkingContent, accepted);
             }
-            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
+            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishNormalized();
             appendAccepted(task, fullResponse, thinkingContent, remainder);
 
-            LlmTokenUsage usage = new LlmTokenUsage(prompt.tokenIds().length, completionTokens);
+            LlmTokenUsage usage = new LlmTokenUsage(prompt.tokenIds().length, completionTokens, thinkingTokens);
             if (task.isCancelled()) {
                 task.getSyncFuture().cancel(false);
                 task.getGenerationFuture().cancel(false);
@@ -321,11 +324,11 @@ public class TaskExecutor implements Runnable {
         try {
             if (state.generator == null) {
                 if (state.prompt == null) {
-                    state.prompt = promptSnapshot(task);
+                    state.setPrompt(promptSnapshot(task));
                 }
                 int completionLimit = resolveCompletionLimit(task, state.prompt, engine.getTaskLaneConfig());
                 if (state.generatedTokens >= completionLimit) {
-                    ReasoningTagNormalizer.AcceptResult remainder = state.reasoningNormalizer.finishWithUsage();
+                    ReasoningTagNormalizer.AcceptResult remainder = state.reasoningNormalizer.finishNormalized();
                     state.appendAccepted(remainder);
                     completeGeneration(task, state.generatedText.toString(), state.usage(), state.thinkingContent.toString());
                     clearSuspendedTask(task);
@@ -386,8 +389,9 @@ public class TaskExecutor implements Runnable {
                 state.generatedTokens++;
                 state.generatedTokenIds.add(token.id());
                 state.rawGeneratedText.append(token.text());
-                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptWithUsage(token.text());
-                if (accepted.visibleCompletion()) state.completionTokens++;
+                ReasoningTagNormalizer.AcceptResult accepted = reasoningNormalizer.acceptNormalized(token.text());
+                if (accepted.countAsThinkingToken()) state.thinkingTokens++;
+                if (accepted.countAsCompletionToken()) state.completionTokens++;
                 state.appendAccepted(accepted);
                 if (engine.shouldSuspendTaskLane(task)) {
                     parkSuspendedTask(state);
@@ -395,7 +399,7 @@ public class TaskExecutor implements Runnable {
                 }
                 state.captureCheckpointIfDue(STANDARD_CONTEXT_CHECKPOINT_INTERVAL_TOKENS);
             }
-            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishWithUsage();
+            ReasoningTagNormalizer.AcceptResult remainder = reasoningNormalizer.finishNormalized();
             state.appendAccepted(remainder);
 
             completeGeneration(task, state.generatedText.toString(), state.usage(), state.thinkingContent.toString());
@@ -779,7 +783,7 @@ public class TaskExecutor implements Runnable {
     }
 
     private PromptSnapshot promptSnapshot(InferenceTask task) {
-        return engine.promptSnapshot(task.getMessages(), task.getSamplerConfig());
+        return engine.promptSnapshot(task.getMessages(), task.getSamplerConfig(), task.getInferenceOptions());
     }
 
     private int[] tokenizePrompt(String formattedPrompt) {
@@ -870,18 +874,24 @@ public class TaskExecutor implements Runnable {
         private final StringBuilder thinkingContent = new StringBuilder();
         private final StringBuilder rawGeneratedText = new StringBuilder();
         private final List<Integer> generatedTokenIds = new ArrayList<>();
-        private final ReasoningTagNormalizer reasoningNormalizer;
+        private ReasoningTagNormalizer reasoningNormalizer;
         private PromptSnapshot prompt;
         private InferenceTokenGenerator generator;
         private GenerationCheckpoint checkpoint;
         private int generatedTokens;
         private int completionTokens;
+        private int thinkingTokens;
         private int checkpointedTokens;
 
         private SuspendedTask(InferenceTask task) {
             this.task = task;
+        }
+
+        private void setPrompt(PromptSnapshot prompt) {
+            this.prompt = prompt;
             this.reasoningNormalizer = new ReasoningTagNormalizer(
-                    task.getInferenceOptions().isCaptureThinkingContent()
+                    task.getInferenceOptions().isCaptureThinkingContent(),
+                    prompt.generationStartsInReasoning()
             );
         }
 
@@ -948,7 +958,7 @@ public class TaskExecutor implements Runnable {
 
         private LlmTokenUsage usage() {
             int promptTokenCount = prompt == null ? 0 : prompt.tokenIds().length;
-            return new LlmTokenUsage(promptTokenCount, completionTokens);
+            return new LlmTokenUsage(promptTokenCount, completionTokens, thinkingTokens);
         }
     }
 }

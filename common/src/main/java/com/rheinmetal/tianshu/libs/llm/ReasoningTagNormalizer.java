@@ -33,24 +33,29 @@ final class ReasoningTagNormalizer {
     }
 
     ReasoningTagNormalizer(boolean captureThinkingContent) {
+        this(captureThinkingContent, false);
+    }
+
+    ReasoningTagNormalizer(boolean captureThinkingContent, boolean startsInReasoning) {
         this.captureThinkingContent = captureThinkingContent;
+        this.inReasoning = startsInReasoning;
     }
 
     String accept(String token) {
-        return acceptWithUsage(token).text();
+        return acceptNormalized(token).text();
     }
 
-    AcceptResult acceptWithUsage(String token) {
-        if (token == null || token.isEmpty()) return new AcceptResult("", "", false);
+    AcceptResult acceptNormalized(String token) {
+        if (token == null || token.isEmpty()) return new AcceptResult("", "", false, false);
         pending.append(token);
         return drain(false);
     }
 
     String finish() {
-        return finishWithUsage().text();
+        return finishNormalized().text();
     }
 
-    AcceptResult finishWithUsage() {
+    AcceptResult finishNormalized() {
         return drain(true);
     }
 
@@ -59,14 +64,31 @@ final class ReasoningTagNormalizer {
         return normalizer.accept(text) + normalizer.finish();
     }
 
+    static boolean promptEndsInReasoningOpen(String text) {
+        if (text == null || text.isEmpty()) return false;
+        String lower = stripTrailing(text).toLowerCase(Locale.ROOT);
+        if (lower.isEmpty()) return false;
+        for (TagAlias alias : OPEN_ALIASES) {
+            int start = lower.length() - alias.rawLower.length();
+            if (start < 0) continue;
+            if (!lower.endsWith(alias.rawLower)) continue;
+            if (alias.linePrefix && start > 0 && lower.charAt(start - 1) != '\n' && lower.charAt(start - 1) != '\r') {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
     private AcceptResult drain(boolean finishing) {
         StringBuilder out = new StringBuilder();
         StringBuilder thinking = new StringBuilder();
-        boolean[] visibleCompletion = new boolean[] { false };
+        boolean[] completionContent = new boolean[] { false };
+        boolean[] thinkingContent = new boolean[] { false };
         while (pending.length() > 0) {
             Match match = findNextMatch();
             if (match != null) {
-                emitTextBeforeMatch(out, thinking, match.index, visibleCompletion);
+                emitTextBeforeMatch(out, thinking, match.index, completionContent, thinkingContent);
                 pending.delete(0, match.alias.raw.length());
                 switch (match.kind) {
                     case REASONING_OPEN -> beginReasoning();
@@ -82,30 +104,39 @@ final class ReasoningTagNormalizer {
             int keepLength = finishing ? 0 : longestAliasPrefixSuffixLength();
             int safeLength = pending.length() - keepLength;
             if (safeLength <= 0) break;
-            emitText(out, thinking, pending.substring(0, safeLength), visibleCompletion);
+            emitText(out, thinking, pending.substring(0, safeLength), completionContent, thinkingContent);
             pending.delete(0, safeLength);
         }
 
         if (finishing && inReasoning) {
             emitReasoningBlock();
         }
-        return new AcceptResult(out.toString(), thinking.toString(), visibleCompletion[0]);
+        return new AcceptResult(out.toString(), thinking.toString(), completionContent[0], thinkingContent[0]);
     }
 
-    private void emitTextBeforeMatch(StringBuilder out, StringBuilder thinking, int length, boolean[] visibleCompletion) {
+    private void emitTextBeforeMatch(StringBuilder out,
+                                     StringBuilder thinking,
+                                     int length,
+                                     boolean[] completionContent,
+                                     boolean[] thinkingContent) {
         if (length <= 0) return;
-        emitText(out, thinking, pending.substring(0, length), visibleCompletion);
+        emitText(out, thinking, pending.substring(0, length), completionContent, thinkingContent);
         pending.delete(0, length);
     }
 
-    private void emitText(StringBuilder out, StringBuilder thinking, String text, boolean[] visibleCompletion) {
+    private void emitText(StringBuilder out,
+                          StringBuilder thinking,
+                          String text,
+                          boolean[] completionContent,
+                          boolean[] thinkingContent) {
         if (inReasoning) {
+            if (!text.isEmpty()) thinkingContent[0] = true;
             emitReasoningText(thinking, text);
         } else if (inIgnoredBlock) {
             return;
         } else {
             out.append(text);
-            if (!text.isEmpty()) visibleCompletion[0] = true;
+            if (!text.isEmpty()) completionContent[0] = true;
         }
     }
 
@@ -327,6 +358,14 @@ final class ReasoningTagNormalizer {
         return List.copyOf(aliases);
     }
 
+    private static String stripTrailing(String value) {
+        int end = value.length();
+        while (end > 0 && Character.isWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(0, end);
+    }
+
     private record TagAlias(String raw, String rawLower, boolean linePrefix, boolean contextual) {
     }
 
@@ -341,6 +380,13 @@ final class ReasoningTagNormalizer {
     private record Match(int index, TagAlias alias, MatchKind kind) {
     }
 
-    record AcceptResult(String text, String thinkingContent, boolean visibleCompletion) {
+    record AcceptResult(String text, String thinkingContent, boolean completionContent, boolean thinkingToken) {
+        boolean countAsThinkingToken() {
+            return thinkingToken && (!completionContent || thinkingContent.length() >= text.length());
+        }
+
+        boolean countAsCompletionToken() {
+            return completionContent && !countAsThinkingToken();
+        }
     }
 }
