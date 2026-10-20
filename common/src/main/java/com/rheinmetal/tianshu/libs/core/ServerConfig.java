@@ -43,6 +43,14 @@ public class ServerConfig {
     public int requestTimeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS;
     public Consumer<InferenceEvent> inferenceEventListener;
 
+    /**
+     * Validates a server configuration.
+     *
+     * <p>A chat model is optional. {@code modelPath} and {@code embeddingModelPath} are alternatives in
+     * that at least one of them must be set: an embedding-only configuration is valid and yields a
+     * server that serves embeddings (RAG vectors) without a chat engine, and a chat-only configuration
+     * is valid as before.
+     */
     static void validateOrThrow(ServerConfig config) {
         List<String> errors = new ArrayList<>();
         validate(config, errors);
@@ -52,7 +60,9 @@ public class ServerConfig {
     }
 
     private static void validate(ServerConfig config, List<String> errors) {
-        if (config.modelPath == null || config.modelPath.isBlank()) errors.add("modelPath is required");
+        if (isBlank(config.modelPath) && isBlank(config.embeddingModelPath)) {
+            errors.add("modelPath or embeddingModelPath is required: set at least one chat or embedding model");
+        }
         range(config.contextSize, 512, 262144, "contextSize", errors);
         range(config.embeddingContextSize, 512, 262144, "embeddingContextSize", errors);
         range(config.threads, 1, 512, "threads", errors);
@@ -64,6 +74,10 @@ public class ServerConfig {
         range(config.maxQueueSize, 1, 1024, "maxQueueSize", errors);
         range(config.chatMaxQueueSize, 1, 1024, "chatMaxQueueSize", errors);
         range(config.requestTimeoutSeconds, 1, 3600, "requestTimeoutSeconds", errors);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static void range(int value, int min, int max, String option, List<String> errors) {

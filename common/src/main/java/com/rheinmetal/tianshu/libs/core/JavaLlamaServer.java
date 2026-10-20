@@ -30,6 +30,16 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+/**
+ * Facade over the local llama.cpp engines: at most one chat model and at most one embedding model.
+ *
+ * <p>Two shapes are supported. Configuring both models behaves as it always has. Configuring only an
+ * embedding model keeps local vectors for RAG while chat is served elsewhere (for example a cloud API):
+ * {@link #start()} succeeds, {@link #isStarted()} is true, {@link #hasEmbeddingEngine()} is true,
+ * {@link #hasChatEngine()} is false, {@link #isReady()} is false, and every chat, task, streaming,
+ * token-counting, and MTP-calibration call fails with a readable
+ * {@link ModelRegistry#CHAT_MODEL_NOT_CONFIGURED} error instead of a NullPointerException.
+ */
 public class JavaLlamaServer {
     static {
         NativeLibraryLoader.ensureLoaded();
@@ -48,12 +58,20 @@ public class JavaLlamaServer {
         return new Builder();
     }
 
+    /**
+     * Plans the chat context budget without loading the chat model.
+     *
+     * @throws IllegalStateException when the configuration has no chat model to plan for
+     */
     public static LlmContextBudgetPlan dryRunContextBudget(ServerConfig config) throws Exception {
         ServerConfig.validateOrThrow(config);
         return dryRunContextBudgetInternal(copyConfig(config));
     }
 
     private static LlmContextBudgetPlan dryRunContextBudgetInternal(ServerConfig config) throws Exception {
+        if (config.modelPath == null || config.modelPath.isBlank()) {
+            throw new IllegalStateException(ModelRegistry.CHAT_MODEL_NOT_CONFIGURED);
+        }
         return LlamaEngine.dryRunContextBudget(
                 config.modelPath,
                 config.contextSize,
@@ -67,6 +85,14 @@ public class JavaLlamaServer {
         );
     }
 
+    /**
+     * Loads the configured models and makes this instance serve them.
+     *
+     * <p>A chat model is optional: with only an embedding model configured, {@code start()} succeeds and
+     * the instance serves {@link #embed(String)} and {@link #search} while every chat entry point fails
+     * with a readable "chat model is not configured" error. See {@link #isStarted()},
+     * {@link #hasChatEngine()}, and {@link #hasEmbeddingEngine()} to tell the modes apart.
+     */
     public synchronized void start() throws Exception {
         if (started.get()) return;
         ServerConfig.validateOrThrow(config);
@@ -77,28 +103,30 @@ public class JavaLlamaServer {
         ModelRegistry localModels = null;
         LibsApi localLibsApi = null;
         try {
-            String modelAlias = config.modelAlias;
-            if (modelAlias == null || modelAlias.isBlank() || modelAlias.equals("unknown")) {
-                modelAlias = extractFileName(config.modelPath);
-            }
+            if (config.modelPath != null && !config.modelPath.isBlank()) {
+                String modelAlias = config.modelAlias;
+                if (modelAlias == null || modelAlias.isBlank() || modelAlias.equals("unknown")) {
+                    modelAlias = extractFileName(config.modelPath);
+                }
 
-            LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.contextSize, config.chatThreads, config.chatMaxQueueSize);
-            LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.contextSize, config.taskThreads, ServerConfig.TASK_HOT_SUSPEND_SLOTS);
-            engine = LlamaEngine.loadChatEngine(
-                    config.modelPath,
-                    config.mtpDraftModelPath,
-                    chatLaneConfig,
-                    taskLaneConfig,
-                    config.gpuLayers,
-                    config.device,
-                    modelAlias,
-                    config.modelProfile,
-                    config.flashAttentionMode,
-                    config.cacheTypeK,
-                    config.cacheTypeV,
-                    config.contextBudgetPolicy,
-                    config.inferenceEventListener
-            );
+                LaneConfig chatLaneConfig = new LaneConfig(InferenceLane.CHAT, config.contextSize, config.chatThreads, config.chatMaxQueueSize);
+                LaneConfig taskLaneConfig = new LaneConfig(InferenceLane.TASK, config.contextSize, config.taskThreads, ServerConfig.TASK_HOT_SUSPEND_SLOTS);
+                engine = LlamaEngine.loadChatEngine(
+                        config.modelPath,
+                        config.mtpDraftModelPath,
+                        chatLaneConfig,
+                        taskLaneConfig,
+                        config.gpuLayers,
+                        config.device,
+                        modelAlias,
+                        config.modelProfile,
+                        config.flashAttentionMode,
+                        config.cacheTypeK,
+                        config.cacheTypeV,
+                        config.contextBudgetPolicy,
+                        config.inferenceEventListener
+                );
+            }
 
             if (config.embeddingModelPath != null && !config.embeddingModelPath.isBlank()) {
                 String embeddingAlias = config.embeddingAlias;
@@ -148,6 +176,13 @@ public class JavaLlamaServer {
         started.set(false);
     }
 
+    /**
+     * Runs one chat completion.
+     *
+     * @throws IllegalStateException when the server is not started; the returned future completes
+     *         exceptionally with {@link ModelRegistry#CHAT_MODEL_NOT_CONFIGURED} when the server was
+     *         started without a chat model
+     */
     public CompletableFuture<String> chat(String message, String systemPrompt) {
         return chat(toMessages(message, systemPrompt));
     }
@@ -328,9 +363,40 @@ public class JavaLlamaServer {
         return requireLibsApi().search(queryText, texts, topK, threshold);
     }
 
+    /**
+     * Whether local chat inference is available: a chat model is configured and loaded, and any
+     * configured embedding model is loaded too.
+     *
+     * <p>This is <em>not</em> a "service is alive" check. A server started in embedding-only mode (for
+     * example a cloud-chat deployment that still needs local RAG vectors) is up and serving
+     * {@link #embed(String)} and {@link #search} while this method returns {@code false}. Use
+     * {@link #isStarted()} for "the service is running", {@link #hasChatEngine()} for chat, and
+     * {@link #hasEmbeddingEngine()} for embeddings.
+     */
     public boolean isReady() {
         LibsApi api = libsApi;
         return api != null && api.isReady();
+    }
+
+    /**
+     * Whether {@link #start()} succeeded and {@link #shutdown()} has not run since, regardless of which
+     * models are bound. A started embedding-only instance answers {@code true} here while
+     * {@link #isReady()} answers {@code false}.
+     */
+    public boolean isStarted() {
+        return libsApi != null;
+    }
+
+    /** Whether a chat model is configured and loaded, i.e. whether chat, task, and streaming calls can run. */
+    public boolean hasChatEngine() {
+        LibsApi api = libsApi;
+        return api != null && api.hasChatEngine();
+    }
+
+    /** Whether an embedding model is configured and loaded, i.e. whether embedding and RAG search can run. */
+    public boolean hasEmbeddingEngine() {
+        LibsApi api = libsApi;
+        return api != null && api.hasEmbeddingEngine();
     }
 
     public boolean supportsEnableThinking() {
@@ -394,9 +460,11 @@ public class JavaLlamaServer {
         return hasChatQueueCapacity();
     }
 
+    /** Number of chat requests waiting in the chat lane; 0 when no chat engine is loaded. */
     public int getChatQueueSize() {
         ModelRegistry current = models;
-        return current == null ? 0 : current.getChatEngine().getChatQueueSize();
+        if (current == null || !current.hasChatEngine()) return 0;
+        return current.getChatEngine().getChatQueueSize();
     }
 
     private LibsApi requireLibsApi() {

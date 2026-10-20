@@ -13,6 +13,7 @@ import com.rheinmetal.tianshu.libs.llm.LlmRuntimeCapabilities;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationRequest;
 import com.rheinmetal.tianshu.libs.llm.MtpCalibrationResult;
 import com.rheinmetal.tianshu.libs.llm.MtpCapability;
+import com.rheinmetal.tianshu.libs.llm.ModelRegistry;
 import com.rheinmetal.tianshu.libs.llm.SamplerConfig;
 import com.rheinmetal.tianshu.libs.rag.RagSearchResult;
 import com.rheinmetal.tianshu.libs.rag.VectorSearch;
@@ -33,6 +34,10 @@ public class LibsApi {
     private static final int MAX_EMBEDDING_TEXT_LENGTH = 8192;
     private static final int MAX_EMBEDDING_BATCH_SIZE = 100;
 
+    /**
+     * Chat engine, or {@code null} when the server runs embedding-only. Every use has to go through
+     * {@link #requireChatEngine()} so a missing chat model can never surface as a NullPointerException.
+     */
     private final LlamaEngine chatEngine;
     private final EmbeddingEngine embeddingEngine;
     private final VectorSearch vectorSearch;
@@ -42,9 +47,15 @@ public class LibsApi {
         this(chatEngine, embeddingEngine, DEFAULT_REQUEST_TIMEOUT_SECONDS);
     }
 
+    /**
+     * @param chatEngine chat engine, or {@code null} to run without chat inference (cloud chat still
+     *                   gets local embedding vectors)
+     * @param embeddingEngine embedding engine, or {@code null} when no embedding model is configured
+     * @throws IllegalArgumentException when both engines are null
+     */
     public LibsApi(LlamaEngine chatEngine, EmbeddingEngine embeddingEngine, int requestTimeoutSeconds) {
-        if (chatEngine == null) {
-            throw new IllegalArgumentException("Chat engine is required");
+        if (chatEngine == null && embeddingEngine == null) {
+            throw new IllegalArgumentException("At least one engine is required: configure a chat model, an embedding model, or both");
         }
         this.chatEngine = chatEngine;
         this.embeddingEngine = embeddingEngine;
@@ -62,25 +73,55 @@ public class LibsApi {
         }
     }
 
+    /**
+     * Whether chat inference is usable: the chat model and any configured embedding model are loaded.
+     *
+     * <p>A server started in embedding-only mode is alive and serves {@link #embed(String)} and
+     * {@link #search} while this method returns {@code false}. Use {@link #hasChatEngine()} and
+     * {@link #hasEmbeddingEngine()} to tell "no chat model" apart from "nothing usable".
+     */
     public boolean isReady() {
-        return chatEngine.isModelLoaded() && (embeddingEngine == null || embeddingEngine.isModelLoaded());
+        return hasChatEngine() && (embeddingEngine == null || embeddingEngine.isModelLoaded());
     }
 
+    /** True when a chat model is configured and loaded. */
+    public boolean hasChatEngine() {
+        return chatEngine != null && chatEngine.isModelLoaded();
+    }
+
+    /** True when an embedding model is configured and loaded. */
+    public boolean hasEmbeddingEngine() {
+        return embeddingEngine != null && embeddingEngine.isModelLoaded();
+    }
+
+    /** False when no chat engine is loaded: a server without a chat model has no chat capacity to give. */
     public boolean hasChatQueueCapacity() {
-        return chatEngine.hasQueueCapacity(InferenceLane.CHAT);
+        return chatEngine != null && chatEngine.hasQueueCapacity(InferenceLane.CHAT);
     }
 
+    /** False when no chat engine is loaded: a server without a chat model has no task capacity to give. */
     public boolean hasTaskQueueCapacity() {
-        return chatEngine.hasQueueCapacity(InferenceLane.TASK);
+        return chatEngine != null && chatEngine.hasQueueCapacity(InferenceLane.TASK);
     }
 
     public void shutdown() {
-        chatEngine.shutdown();
+        LlamaEngine chat = chatEngine;
+        if (chat != null) {
+            chat.shutdown();
+        }
         if (embeddingEngine != null) {
             embeddingEngine.shutdown();
         }
     }
 
+    /**
+     * Runs one chat completion.
+     *
+     * <p>Chat, task, and streaming inference report every failure through the returned future, so a
+     * server started without a chat model completes the future exceptionally with an
+     * {@link IllegalStateException} whose message is {@link ModelRegistry#CHAT_MODEL_NOT_CONFIGURED}.
+     * Probe {@link #hasChatEngine()} before submitting work to avoid that path entirely.
+     */
     public CompletableFuture<String> chat(List<ChatMessage> messages) {
         return chat(messages, null, 0);
     }
@@ -227,33 +268,49 @@ public class LibsApi {
         return countChatPromptTokens(messages, sampler, null);
     }
 
+    /**
+     * @throws IllegalStateException when the server was started without a chat model
+     */
     public int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler, InferenceOptions options) {
+        LlamaEngine engine = requireChatEngine();
         List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
-        return chatEngine.countChatPromptTokens(llamaMessages, sampler, options);
+        return engine.countChatPromptTokens(llamaMessages, sampler, options);
     }
 
+    /** False when no chat engine is loaded. */
     public boolean supportsMtp() {
-        return chatEngine.supportsMtp();
+        return chatEngine != null && chatEngine.supportsMtp();
     }
 
+    /** A non-supported capability when no chat engine is loaded. */
     public MtpCapability getMtpCapability() {
-        return chatEngine.getMtpCapability();
+        return chatEngine == null ? new MtpCapability(false, 0, null) : chatEngine.getMtpCapability();
     }
 
+    /** Capability snapshot of the chat engine; {@link LlmRuntimeCapabilities#unavailable()} without one. */
     public LlmRuntimeCapabilities getRuntimeCapabilities() {
-        return chatEngine.getRuntimeCapabilities();
+        return chatEngine == null ? LlmRuntimeCapabilities.unavailable() : chatEngine.getRuntimeCapabilities();
     }
 
+    /** Context budget of the chat engine; an unavailable plan without one. */
     public LlmContextBudgetPlan getContextBudgetPlan() {
-        return chatEngine.getContextBudgetPlan();
+        return chatEngine == null
+                ? LlmContextBudgetPlan.unavailable(ModelRegistry.CHAT_MODEL_NOT_CONFIGURED)
+                : chatEngine.getContextBudgetPlan();
     }
 
+    /** Context budget of the chat engine; an unavailable plan without one. */
     public LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane) {
-        return chatEngine.getContextBudgetPlan(lane);
+        return chatEngine == null
+                ? LlmContextBudgetPlan.unavailable(ModelRegistry.CHAT_MODEL_NOT_CONFIGURED)
+                : chatEngine.getContextBudgetPlan(lane);
     }
 
+    /**
+     * @throws IllegalStateException when the server was started without a chat model
+     */
     public CompletableFuture<MtpCalibrationResult> calibrateMtpAsync(MtpCalibrationRequest request) {
-        return chatEngine.calibrateMtpAsync(request);
+        return requireChatEngine().calibrateMtpAsync(request);
     }
 
     public MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exception {
@@ -355,6 +412,23 @@ public class LibsApi {
         }
     }
 
+    /**
+     * The chat engine, or an explicit failure when this instance was created without one.
+     *
+     * <p>Every chat, task, streaming, token-counting, and MTP-calibration path goes through this method,
+     * so an embedding-only server reports a readable state instead of failing with a
+     * NullPointerException or pretending an empty result was a success.
+     *
+     * @throws IllegalStateException when no chat model is configured
+     */
+    private LlamaEngine requireChatEngine() {
+        LlamaEngine current = chatEngine;
+        if (current == null) {
+            throw new IllegalStateException(ModelRegistry.CHAT_MODEL_NOT_CONFIGURED);
+        }
+        return current;
+    }
+
     private StreamResult doStreamChat(InferenceLane lane,
                                                     List<ChatMessage> messages,
                                                     SamplerConfig sampler,
@@ -377,16 +451,17 @@ public class LibsApi {
                                                     Consumer<String> thinkingConsumer,
                                                     Consumer<LlmStreamFinish> finishConsumer) {
         try {
+            LlamaEngine engine = requireChatEngine();
             validateMaxTokens(maxTokens);
             if (tokenConsumer == null) {
                 throw new IllegalArgumentException("tokenConsumer is required");
             }
-            if (!chatEngine.hasQueueCapacity(lane)) {
+            if (!engine.hasQueueCapacity(lane)) {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
             InferenceTask task = InferenceTask.stream(lane, llamaMessages, sampler, maxTokens, priority, preemptible, tokenConsumer, thinkingConsumer, finishConsumer, options);
-            chatEngine.submitTask(task);
+            engine.submitTask(task);
             return new StreamResult(task, cancellableFuture(task));
         } catch (Exception e) {
             CompletableFuture<String> failed = new CompletableFuture<>();
@@ -427,13 +502,14 @@ public class LibsApi {
                                                                         boolean preemptible,
                                                                         InferenceOptions options) {
         try {
+            LlamaEngine engine = requireChatEngine();
             validateMaxTokens(maxTokens);
-            if (!chatEngine.hasQueueCapacity(lane)) {
+            if (!engine.hasQueueCapacity(lane)) {
                 throw new RejectedExecutionException(lane.wireName() + " inference queue is full");
             }
             List<LlamaCppChatMessage> llamaMessages = convertMessages(messages);
             InferenceTask task = InferenceTask.syncChat(lane, llamaMessages, sampler, maxTokens, priority, preemptible, options);
-            chatEngine.submitTask(task);
+            engine.submitTask(task);
             return cancellableGenerationFuture(task);
         } catch (Exception e) {
             CompletableFuture<LlmGenerationResult> failed = new CompletableFuture<>();
@@ -478,7 +554,7 @@ public class LibsApi {
         });
         exposed.whenComplete((result, error) -> {
             if (exposed.isCancelled() && !task.getSyncFuture().isDone()) {
-                chatEngine.cancelTask(task);
+                requireChatEngine().cancelTask(task);
             }
         });
         return exposed;
@@ -495,7 +571,7 @@ public class LibsApi {
         });
         exposed.whenComplete((result, error) -> {
             if (exposed.isCancelled() && !task.getGenerationFuture().isDone()) {
-                chatEngine.cancelTask(task);
+                requireChatEngine().cancelTask(task);
             }
         });
         return exposed;

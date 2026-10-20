@@ -13,6 +13,7 @@ libs 只提供底层基础能力，不包含业务逻辑。
 | 调度 | CHAT 优先，可暂停 TASK |
 | 运行选项 | InferenceOptions 控制请求级 MTP、Vulkan 时间片优先级和 COT 捕获 |
 | 能力探测 | supportsMtp / getMtpCapability / calibrateMtp / getRuntimeCapabilities / getContextBudgetPlan |
+| 运行模式 | 聊天模型与 embedding 模型至少配置其一：只配聊天、只配 embedding、或两者都配都支持 |
 
 ---
 
@@ -24,7 +25,7 @@ libs 只提供底层基础能力，不包含业务逻辑。
 
 ```java
 JavaLlamaServer service = JavaLlamaServer.builder()
-    .model("models/qwen3.5-4b.gguf")      // 必填：LLM 模型
+    .model("models/qwen3.5-4b.gguf")      // 可选：LLM 聊天模型；与 embeddingModel 至少配置其一
     .modelAlias("qwen3.5-4b")             // 可选：模型别名
     .modelProfile("auto")                 // 可选：auto / qwen3 / qwen3.5 / deepseek-r1 / generic
     .mtpDraftModel("models/mtp-gemma-4-E4B-it.gguf") // 可选：Gemma 等分体 MTP draft 模型
@@ -40,7 +41,7 @@ JavaLlamaServer service = JavaLlamaServer.builder()
     .inferenceEventListener(event -> {    // 可选：CHAT / TASK 统一推理状态事件
         // event.getType(), event.getLane(), event.getReplayCharacters()
     })
-    .embeddingModel("models/bge.gguf")    // 可选：不配置则 embed/search 不可用
+    .embeddingModel("models/bge.gguf")    // 可选：与 model 至少配置其一；不配置则 embed/search 不可用
     .embeddingContextSize(16000)
     .embeddingThreads(4)
     .embeddingGpuLayers(999)
@@ -52,6 +53,10 @@ JavaLlamaServer service = JavaLlamaServer.builder()
 service.start();      // 加载模型并启动服务
 service.shutdown();   // 游戏关闭或模块卸载时释放资源
 ```
+
+`build()` 与 `start()` 都会校验配置：聊天模型 `modelPath` 与 embedding 模型 `embeddingModelPath` 至少配置其一，两者皆为空才拒绝，错误消息为 `modelPath or embeddingModelPath is required: set at least one chat or embedding model`。两个模型都配置时行为与旧版一致；只配置 embedding 模型即可按“仅 embedding”模式启动，详见 2.0.1。
+
+`start()` 只在 `modelPath` 非空时加载聊天引擎，embedding 引擎的加载逻辑与是否配置聊天模型无关。
 
 上层需要在加载前规划 ctx 时，应先对同一组模型级参数执行 dryrun：
 
@@ -103,6 +108,62 @@ JavaLlamaServer service = JavaLlamaServer.builder()
 
 `contextBudgetPolicy` 同样是模型级配置，不是业务 prompt 协议。默认值保守提供通用预算参考：`promptMarginTokens=64`、`safetyMarginBytes=512MiB`。上层通过 `contextBudgetPolicy(...)` 传入完整策略。libs 不会在 `start()` 中黑盒修改 `contextSize`；上层应把 dryrun 返回的 `plannedContextSize` 显式写回加载配置。如果 dryrun 使用了自定义预算策略，正式加载也应传入同一策略，避免启动校验和运行期 prompt 余量口径不一致。
 
+### 2.0.1 仅 embedding 的启动模式
+
+只配置 embedding 模型时，服务照常启动并对外提供 `embed` / `search`（典型场景：聊天走云端 API，本地只保留 RAG 向量）。此时没有任何聊天引擎，聊天相关入口按下面的契约失败或降级，不会因为缺少模型而抛 NPE。
+
+```java
+JavaLlamaServer server = JavaLlamaServer.builder()
+    .embeddingModel("models/bge.gguf")
+    .embeddingContextSize(16000)
+    .embeddingThreads(4)
+    .embeddingGpuLayers(999)
+    .build();
+
+server.start();                                 // 成功：只加载 embedding 引擎
+boolean alive = server.isStarted();             // true
+boolean vectors = server.hasEmbeddingEngine();  // true
+boolean chat = server.hasChatEngine();          // false
+boolean ready = server.isReady();               // false：isReady() 只表示聊天可用
+```
+
+引擎组合约束：`LibsApi` 与 `ModelRegistry` 的构造器要求聊天引擎与 embedding 引擎至少其一，两者都为 `null` 时抛 `IllegalArgumentException`，消息为 `At least one engine is required: configure a chat model, an embedding model, or both`。
+
+状态访问器：
+
+| 方法 | 语义 |
+|------|------|
+| `isStarted()` | `start()` 成功且之后未 `shutdown()`；与配置了哪些模型无关，仅 embedding 模式下为 `true` |
+| `hasChatEngine()` | 聊天模型已配置且已加载 |
+| `hasEmbeddingEngine()` | embedding 模型已配置且已加载 |
+| `isReady()` | 聊天可用：聊天模型已加载，且已配置的 embedding 模型也已加载；仅 embedding 模式下恒为 `false` |
+| `ModelRegistry.hasChatEngine()` | 只表示已绑定聊天引擎，不含加载状态 |
+
+`ModelRegistry` 按“本次绑定了哪些引擎”建模，拿不到加载进度，因此 `ModelRegistry.hasChatEngine()` 与 `LibsApi.hasChatEngine()` / `JavaLlamaServer.hasChatEngine()` 语义有细微差别：前者为 `true` 不代表聊天已可用。上层判断“能否聊天”应使用上层 facade 的同名方法。
+
+错误文案常量：`ModelRegistry.CHAT_MODEL_NOT_CONFIGURED`，内容是 `Chat model is not configured: this server was started without a chat model, so chat inference is unavailable`。它同时用作无聊天引擎时的异常消息和 `LlmContextBudgetPlan.limitation`。上层应探测 `hasChatEngine()` 判断状态，不要匹配这段文本。
+
+无聊天引擎时的行为契约：
+
+| 入口 | 行为 |
+|------|------|
+| `chat` / `chatWithUsage` / `chatStream` / `task` / `taskWithUsage` / `taskStream` / `taskStreamWithUsage`（`LibsApi` 共 20 个推理重载，`JavaLlamaServer` 的便捷重载转发到同一通道） | 返回的 future 以 `IllegalStateException(CHAT_MODEL_NOT_CONFIGURED)` 异常完成，沿用既有失败通道 |
+| `countChatPromptTokens` | 同步抛同一异常 |
+| `calibrateMtp` / `calibrateMtpAsync` | 同步抛同一异常 |
+| `supportsEnableThinking()` | `false` |
+| `supportsMtp()` | `false` |
+| `getMtpCapability()` | 非支持能力：`isSupported()=false`、`isCalibrated()=false`、layerCount 为 0、bestTrial 为 `null` |
+| `getRuntimeCapabilities()` | `LlmRuntimeCapabilities.unavailable()` |
+| `getContextBudgetPlan()` / `getContextBudgetPlan(lane)` | `LlmContextBudgetPlan.unavailable(CHAT_MODEL_NOT_CONFIGURED)` |
+| `hasChatQueueCapacity()` / `hasTaskQueueCapacity()` / `hasQueueCapacity()` | `false` |
+| `getChatQueueSize()` | `0` |
+| `shutdown()` | null 安全，重复调用安全 |
+| `embed` / `search` | 行为不变：有 embedding 引擎就正常出结果，没有 embedding 引擎时仍报原有错误 |
+
+能力与状态查询在仅 embedding 模式下不会抛异常；只有真正的推理、token 计数和 MTP 校准入口会失败。
+
+`Builder.dryRunContextBudget()` 与静态 `JavaLlamaServer.dryRunContextBudget(ServerConfig)` 都是聊天上下文规划入口：没有聊天模型时直接抛 `IllegalStateException(CHAT_MODEL_NOT_CONFIGURED)`，不会走到 `Path.of(null)`。
+
 ### 2.1 推理
 
 ```java
@@ -129,6 +190,7 @@ CompletableFuture<String> chatStream(List<ChatMessage> messages, SamplerConfig s
 
 // 请求前 token 预算查询；使用当前 LLM 的 chat template + tokenizer
 int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler);
+int countChatPromptTokens(List<ChatMessage> messages, SamplerConfig sampler, InferenceOptions options);
 
 // 后台任务（可被 chat 暂停）- 非流式返回
 CompletableFuture<String> task(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible);
@@ -142,6 +204,8 @@ CompletableFuture<String> taskStream(List<ChatMessage> messages, SamplerConfig s
 CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<LlmStreamFinish> finishConsumer);
 CompletableFuture<LlmGenerationResult> taskStreamWithUsage(List<ChatMessage> messages, SamplerConfig sampler, int maxTokens, int priority, boolean preemptible, InferenceOptions options, Consumer<String> tokenConsumer, Consumer<String> thinkingConsumer, Consumer<LlmStreamFinish> finishConsumer);
 ```
+
+以上推理入口在仅 embedding 模式下（见 2.0.1）不会抛 NPE：返回的 future 以 `IllegalStateException(CHAT_MODEL_NOT_CONFIGURED)` 异常完成；`countChatPromptTokens` 则同步抛同一异常。上层应在提交请求前用 `hasChatEngine()` 判断，避免走到失败通道。
 
 所有 `chat` / `chatStream` / `task` / `taskStream` 返回的 `CompletableFuture` 都是本次请求的控制句柄：
 
@@ -262,7 +326,7 @@ if (supported && !capability.isCalibrated()) {
 boolean supportsMtp();
 MtpCapability getMtpCapability();
 LlmRuntimeCapabilities getRuntimeCapabilities();
-LlmContextBudgetPlan JavaLlamaServer.Builder.dryRunContextBudget();
+LlmContextBudgetPlan JavaLlamaServer.Builder.dryRunContextBudget() throws Exception;
 LlmContextBudgetPlan getContextBudgetPlan();
 LlmContextBudgetPlan getContextBudgetPlan(InferenceLane lane);
 CompletableFuture<MtpCalibrationResult> calibrateMtpAsync();
@@ -292,6 +356,7 @@ MtpCalibrationResult calibrateMtp(MtpCalibrationRequest request) throws Exceptio
 - 校准按 tokens/s 选择当前最优值，并缓存到当前 `LlamaEngine`。
 - `InferenceOptions.builder().mtpEnabled(true).build()` 未指定 `mtpDraftMax` 时，会使用缓存的推荐值；未校准且无缓存时使用默认 `draftMax=1`。
 - 校准结果会写入 libs 内部 MTP 缓存；上层不需要透传或持久化推荐 `draftMax`。
+- 仅 embedding 模式下没有聊天引擎：`calibrateMtp` / `calibrateMtpAsync` 直接抛 `IllegalStateException(CHAT_MODEL_NOT_CONFIGURED)`，不发起校准；`supportsMtp()` 为 `false`，`getMtpCapability()` 返回非支持能力。
 
 ### 2.1.5 请求级 tools 模板透传
 
@@ -386,6 +451,7 @@ List<RagSearchResult> search(String queryText, List<String> texts);
 - MTP 冷恢复优先使用 target context checkpoint + `LlamaCppSpeculativeProcessor.beginFromRestoredTarget(...)`，并保留至少 1 个已输出 token 做 tail replay 来重建 draft context 和 pending 状态；如果 checkpoint 不可用或 restored-target 恢复失败，则回退为 token-id 全量 replay。
 - 当前 checkpoint 只在无 grammar、无随机采样、无重复/频率/存在惩罚的安全配置下用于快速恢复；复杂采样配置会回退为 token-id 全量 replay，因为 JJML 当前 context state 不包含 sampler chain / grammar 状态。
 - 如果 chat 在 COLD replay 期间到达，JJML 当前高层 API 无法可靠分片中断 replay，chat 需要等本次 replay 返回到可检查点后再执行；上层可通过 `inferenceEventListener` 的 `COLD_RESUME_STARTED/PREFILL_COMPLETED/COLD_RESUME_COMPLETED` 在 UI 中提示“后台任务恢复中可能稍慢”。
+- 仅 embedding 模式下没有聊天引擎，也就没有 CHAT / TASK 队列：`hasChatQueueCapacity()` / `hasTaskQueueCapacity()` / `hasQueueCapacity()` 均为 `false`，`getChatQueueSize()` 为 `0`。
 
 ---
 
@@ -580,7 +646,9 @@ public record LlmRuntimeCapabilities(
     boolean supportsEmbeddedMtp,
     boolean externalMtpAvailable,
     int mtpLayerCount
-) {}
+) {
+    public static LlmRuntimeCapabilities unavailable();
+}
 
 public record LlmContextBudgetPlan(
     int requestedContextSize,
@@ -592,7 +660,9 @@ public record LlmContextBudgetPlan(
     long safetyMarginBytes,
     boolean reliable,
     String limitation
-) {}
+) {
+    public static LlmContextBudgetPlan unavailable(String limitation);
+}
 ```
 
 说明：
@@ -603,13 +673,19 @@ public record LlmContextBudgetPlan(
 - `memoryContextSize` 是按当前设备可用显存和安全余量推导出的 ctx 上限；无法可靠估算时为 `-1` 并通过 `limitation` 说明原因。
 - `reliable=false` 表示运行时无法提供完整显存或 KV 估算事实；此时上层不应把 `plannedContextSize` 当成安全规划结果。
 - `trainingContextSize` 只作为模型元数据报告；是否把训练上下文作为硬上限属于上层或部署策略，不在 libs 中隐式截断。
+- `unavailable(...)` 工厂用于没有聊天引擎时的状态查询：`getRuntimeCapabilities()` 返回 `LlmRuntimeCapabilities.unavailable()`，`getContextBudgetPlan()` 与其按 lane 重载返回 `LlmContextBudgetPlan.unavailable(CHAT_MODEL_NOT_CONFIGURED)`，这些查询都不抛异常。
 
 ---
 
 ## 4. 服务状态
 
 ```java
-// 检查是否就绪
+// 启动状态（与配置了哪些模型无关）
+boolean isStarted();           // start() 成功且之后未 shutdown()
+boolean hasChatEngine();       // 聊天模型已配置且已加载
+boolean hasEmbeddingEngine();  // embedding 模型已配置且已加载
+
+// 检查聊天是否就绪；只表示“聊天可用”，不是“服务存活”
 boolean isReady();
 boolean supportsEnableThinking();
 boolean supportsMtp();
@@ -631,6 +707,19 @@ int getChatQueueSize();
 void shutdown();
 ```
 
+`isReady()` 的语义是“聊天可用”：要求聊天模型已加载，且已配置的 embedding 模型也已加载。仅 embedding 模式下服务是活的，但 `isReady()` 返回 `false`，因此不能把 `isReady()` 当健康检查用：
+
+| 判断目的 | 使用 |
+|----------|------|
+| 服务是否已启动且未关闭 | `isStarted()` |
+| 能否聊天 / 任务推理 | `hasChatEngine()` |
+| 能否向量化 / RAG 检索 | `hasEmbeddingEngine()` |
+| 聊天是否就绪（含已配置的 embedding 模型也已加载） | `isReady()` |
+
+`shutdown()` 在没有任何引擎、重复调用、以及仅 embedding 模式下都是安全的；调用后 `isStarted()`、`hasChatEngine()`、`hasEmbeddingEngine()`、`isReady()` 全部返回 `false`。
+
+`ModelRegistry` 也有同名的 `hasChatEngine()` / `hasEmbeddingEngine()` / `isReady()`，但 `ModelRegistry.hasChatEngine()` 只表示已绑定聊天引擎，不含加载状态；上层使用 facade 上的同名方法即可，语义差异见 2.0.1。
+
 ---
 
 ## 5. 设计决策
@@ -646,3 +735,8 @@ void shutdown();
 | 请求级运行策略 | 采样参数放在 SamplerConfig；MTP / Vulkan 时间片放在 InferenceOptions |
 | MTP 策略 | 模型级能力探测，请求级启用，校准结果缓存在当前 LlamaEngine |
 | 视觉能力 | 当前文本推理路径不加载 mtmd/mmproj；视觉仍保持显式 opt-in，不在本接口中默认启用 |
+| 模型配置约束 | 聊天模型与 embedding 模型至少配置其一；两者皆空才拒绝启动 |
+| 仅 embedding 模式 | 没有聊天引擎时仍提供 embed / search；聊天入口走固定失败通道，不静默返回空结果 |
+| `isReady()` 语义 | 只表示聊天可用；服务存活用 `isStarted()`，模型可用性用 `hasChatEngine()` / `hasEmbeddingEngine()` |
+| 无聊天引擎的失败通道 | 推理与流式沿用 future 异常完成（`IllegalStateException(CHAT_MODEL_NOT_CONFIGURED)`）；token 计数与 MTP 校准同步抛出 |
+| `ModelRegistry.hasChatEngine()` | 只表示已绑定聊天引擎，不含加载状态；上层判断可用性用 facade 同名方法 |

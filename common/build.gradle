@@ -39,6 +39,7 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
     systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
+    systemProperty 'tianshu.embedding.model', System.getProperty('tianshu.embedding.model', '')
     systemProperty 'tianshu.llm.samples', System.getProperty('tianshu.llm.samples', '')
     systemProperty 'tianshu.llm.perf', System.getProperty('tianshu.llm.perf', '')
 }
