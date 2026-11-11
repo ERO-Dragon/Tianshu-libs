@@ -48,7 +48,7 @@ tasks.register('manualNoThinkChat', JavaExec) {
     group = 'verification'
     description = 'Starts an interactive no-think LLM chat console for manual latency testing.'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualNoThinkChat'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualNoThinkChat'
     standardInput = System.in
     systemProperty 'tianshu.llm.model', System.getProperty(
             'tianshu.llm.model',
@@ -62,7 +62,7 @@ tasks.register('manualLatencyBenchmark', JavaExec) {
     group = 'verification'
     description = 'Measures TTFT, generation throughput, and GPU memory for a local GGUF model.'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualLatencyBenchmark'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualLatencyBenchmark'
     systemProperty 'tianshu.llm.model', System.getProperty(
             'tianshu.llm.model',
             'D:\\Minecraft\\Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf'
@@ -86,7 +86,7 @@ tasks.register('manualUsageSmoke', JavaExec) {
     description = 'Loads a GGUF model and smoke-tests token count plus usage-returning chat/task APIs.'
     workingDir = rootProject.projectDir
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualUsageSmoke'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualUsageSmoke'
     systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
     systemProperty 'tianshu.llm.context', System.getProperty('tianshu.llm.context', '4096')
     systemProperty 'tianshu.llm.gpuLayers', System.getProperty('tianshu.llm.gpuLayers', '999')
@@ -101,7 +101,7 @@ tasks.register('manualMtpCalibrationBenchmark', JavaExec) {
     group = 'verification'
     description = 'Runs the heavy long-context MTP calibration benchmark and prints draftMax throughput.'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualMtpCalibrationBenchmark'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualMtpCalibrationBenchmark'
     systemProperty 'tianshu.llm.model', System.getProperty(
             'tianshu.llm.model',
             'D:\\AIPROJECT\\Qwen3.5-2B-Q4_K_M.gguf'
@@ -120,7 +120,7 @@ tasks.register('manualMtpLongOutputBenchmark', JavaExec) {
     group = 'verification'
     description = 'Runs a long-output MTP benchmark and prints draftMax throughput.'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualMtpLongOutputBenchmark'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualMtpLongOutputBenchmark'
     systemProperty 'tianshu.llm.model', System.getProperty(
             'tianshu.llm.model',
             'D:\\AIPROJECT\\Qwen3.5-2B-Q4_K_M.gguf'
@@ -139,7 +139,7 @@ tasks.register('manualProductionSmoke', JavaExec) {
     group = 'verification'
     description = 'Runs a production-like smoke test covering events, backpressure, cold resume, MTP, and embeddings.'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualProductionSmoke'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualProductionSmoke'
     systemProperty 'tianshu.llm.model', System.getProperty('tianshu.llm.model', '')
     systemProperty 'tianshu.embedding.model', System.getProperty('tianshu.embedding.model', '')
     systemProperty 'tianshu.llm.modelProfile', System.getProperty('tianshu.llm.modelProfile', 'auto')
@@ -166,7 +166,7 @@ tasks.register('manualToolsJsonMatrixSmoke', JavaExec) {
     description = 'Runs a production-like Chinese matrix smoke for toolsJson, long prompts, COT, streaming, and task lane.'
     workingDir = rootProject.projectDir
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rheinmetal.tianshu.libs.llm.ManualToolsJsonMatrixSmoke'
+    mainClass = 'com.rheinmetal.tianshu.foundry.llm.ManualToolsJsonMatrixSmoke'
     systemProperty 'tianshu.tools.models', System.getProperty(
             'tianshu.tools.models',
             'D:\\Minecraft\\Models\\qwen3.5-2B-MTP-unsloth\\Qwen3.5-2B-Q4_K_M.gguf;D:\\Minecraft\\Models\\gemmaE4B-MTP-unsloth\\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'

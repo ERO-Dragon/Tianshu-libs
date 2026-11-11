@@ -1,12 +1,12 @@
 English | [中文](./README_zh.md)
 
-# Tianshu Libraries
+# Foundry (百工)
 
 [CurseForge](https://www.curseforge.com/minecraft/mc-mods/tianshu-library/preview) | [Modrinth](https://modrinth.com/mod/tianshu-library) | [GitHub](https://github.com/ERO-Dragon/Tianshu-libs) | [Gitee](https://gitee.com/tianshu-ai/tianshu-libs)
 
 ---
 
-Tianshu Libraries provides local AI capabilities for Minecraft, including LLM inference, speech recognition, and embedding vectorization. It serves as a core dependency backend for AI-driven mods.
+Foundry (百工) provides local AI capabilities for Minecraft, including LLM inference, speech recognition, and embedding vectorization. It serves as a core dependency backend for AI-driven mods.
 
 ## ⚠️ Important Notes
 
@@ -21,7 +21,7 @@ Tianshu Libraries provides local AI capabilities for Minecraft, including LLM in
 
 ## ⚙️ Installation
 
-Simply drop the downloaded mod JAR (`tianshu_libs-x.x.x.jar`) into your `.minecraft/mods` folder.
+Simply drop the downloaded mod JAR (`tianshu_foundry-x.x.x.jar`) into your `.minecraft/mods` folder.
 
 ## Features
 

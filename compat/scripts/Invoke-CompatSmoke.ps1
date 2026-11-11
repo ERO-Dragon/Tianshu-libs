@@ -31,7 +31,7 @@ if ($Targets.Count -eq 0) {
 }
 
 $requiredPatterns = @(
-    'TIANSHU_LIBS_BOOTSTRAP_OK loader=',
+    'TIANSHU_FOUNDRY_BOOTSTRAP_OK loader=',
     '[api][jjml] OK',
     '[api][sherpa-onnx] OK',
     '[api][onnxruntime] OK'
@@ -253,7 +253,7 @@ foreach ($target in $Targets) {
         $combined = Get-CombinedLog $stdoutPath $stderrPath $logsDir
 
         $matched = @($requiredPatterns | Where-Object { $combined.Contains($_) })
-        if (-not $smokeSeen -and $matched.Count -eq $requiredPatterns.Count -and $combined.Contains("TIANSHU_LIBS_BOOTSTRAP_OK loader=$($spec.loader)")) {
+        if (-not $smokeSeen -and $matched.Count -eq $requiredPatterns.Count -and $combined.Contains("TIANSHU_FOUNDRY_BOOTSTRAP_OK loader=$($spec.loader)")) {
             $smokeSeen = $true
             $postSmokeDeadline = (Get-Date).AddSeconds($PostSmokeSeconds)
             Write-Host "SMOKE $target observed; watching for $PostSmokeSeconds more seconds"

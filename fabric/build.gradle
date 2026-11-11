@@ -48,10 +48,10 @@ def generateFabricJjmlMetadata = tasks.register('generateFabricJjmlMetadata') {
     doLast {
         def metadata = [
                 schemaVersion: 1,
-                id           : 'tianshu_libs_jjml',
+                id           : 'tianshu_foundry_jjml',
                 version      : jjmlVersion,
-                name         : 'Tianshu Libraries JJML',
-                description  : 'Nested JJML dependency for Tianshu Libraries.',
+                name         : 'Foundry JJML',
+                description  : 'Nested JJML dependency for Foundry.',
                 license      : 'LGPL-2.1-only',
                 environment  : '*',
                 depends      : [
@@ -110,11 +110,11 @@ def generateFabricMetadata = tasks.register('generateFabricMetadata') {
                 id           : fabricMetadataProperties.mod_id,
                 version      : fabricMetadataProperties.mod_version,
                 name         : fabricMetadataProperties.mod_name,
-                description  : 'Native AI inference library for Tianshu mod. Bundles llama.cpp (jjml), ONNX Runtime, Sherpa-ONNX, and SentencePiece.',
+                description  : 'Native AI inference library for Minecraft. Bundles llama.cpp (jjml), ONNX Runtime, Sherpa-ONNX, and SentencePiece.',
                 license      : fabricMetadataProperties.mod_license,
                 environment  : 'client',
                 entrypoints  : [
-                        main: ['com.rheinmetal.TianshuLibsFabricMod']
+                        main: ['com.rheinmetal.FoundryFabricMod']
                 ],
                 jars         : nestedJars,
                 depends      : [

@@ -7,7 +7,7 @@ modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
 description='''
-Native AI inference library for Tianshu mod.
+Native AI inference library for Minecraft.
 Bundles llama.cpp (jjml), ONNX Runtime, Sherpa-ONNX, and SentencePiece.
 '''
 displayTest="IGNORE_SERVER_VERSION"

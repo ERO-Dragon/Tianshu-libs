@@ -7,7 +7,7 @@
                                         "status":  "verified",
                                         "requiredEntries":  [
                                                                 "fabric.mod.json",
-                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                "com/rheinmetal/FoundryFabricMod.class"
                                                             ]
                                     },
                     "fabric-1.20.1":  {
@@ -17,7 +17,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.20.2":  {
@@ -27,7 +27,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.20.3":  {
@@ -37,7 +37,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.20.4":  {
@@ -47,7 +47,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.20.5":  {
@@ -57,7 +57,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.20.6":  {
@@ -67,7 +67,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21":  {
@@ -78,7 +78,7 @@
                                         "status":  "verified",
                                         "requiredEntries":  [
                                                                 "fabric.mod.json",
-                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                "com/rheinmetal/FoundryFabricMod.class"
                                                             ]
                                     },
                     "fabric-1.21.1":  {
@@ -89,7 +89,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.2":  {
@@ -100,7 +100,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.3":  {
@@ -111,7 +111,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.4":  {
@@ -122,7 +122,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.5":  {
@@ -133,7 +133,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.6":  {
@@ -144,7 +144,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.7":  {
@@ -155,7 +155,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.8":  {
@@ -166,7 +166,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.9":  {
@@ -177,7 +177,7 @@
                                           "status":  "verified",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-1.21.10":  {
@@ -188,7 +188,7 @@
                                            "status":  "verified",
                                            "requiredEntries":  [
                                                                    "fabric.mod.json",
-                                                                   "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                   "com/rheinmetal/FoundryFabricMod.class"
                                                                ]
                                        },
                     "fabric-1.21.11":  {
@@ -199,7 +199,7 @@
                                            "status":  "verified",
                                            "requiredEntries":  [
                                                                    "fabric.mod.json",
-                                                                   "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                   "com/rheinmetal/FoundryFabricMod.class"
                                                                ]
                                        },
                     "fabric-26.1":  {
@@ -211,7 +211,7 @@
                                         "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
                                         "requiredEntries":  [
                                                                 "fabric.mod.json",
-                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                "com/rheinmetal/FoundryFabricMod.class"
                                                             ]
                                     },
                     "fabric-26.1.1":  {
@@ -223,7 +223,7 @@
                                           "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1.1 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-26.1.2":  {
@@ -235,7 +235,7 @@
                                           "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.1.2 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
                                           "requiredEntries":  [
                                                                   "fabric.mod.json",
-                                                                  "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                  "com/rheinmetal/FoundryFabricMod.class"
                                                               ]
                                       },
                     "fabric-26.2":  {
@@ -247,7 +247,7 @@
                                         "blockedReason":  "Fabric Loom 1.11 cannot resolve official Mojang mappings for Minecraft 26.2 because the Mojang version metadata currently exposes no client_mappings/server_mappings downloads.",
                                         "requiredEntries":  [
                                                                 "fabric.mod.json",
-                                                                "com/rheinmetal/TianshuLibsFabricMod.class"
+                                                                "com/rheinmetal/FoundryFabricMod.class"
                                                             ]
                                     },
                     "forge-1.20":  {
@@ -258,7 +258,7 @@
                                        "status":  "verified",
                                        "requiredEntries":  [
                                                                "META-INF/mods.toml",
-                                                               "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                               "com/rheinmetal/FoundryForgeCompatMod.class"
                                                            ]
                                    },
                     "forge-1.20.1":  {
@@ -269,7 +269,7 @@
                                          "status":  "blocked",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ],
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
                                      },
@@ -281,7 +281,7 @@
                                          "status":  "blocked",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ],
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
                                      },
@@ -293,7 +293,7 @@
                                          "status":  "blocked",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ],
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
                                      },
@@ -305,7 +305,7 @@
                                          "status":  "blocked",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ],
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
                                      },
@@ -316,7 +316,7 @@
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge.",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ]
                                      },
                     "forge-1.20.6":  {
@@ -327,7 +327,7 @@
                                          "status":  "blocked",
                                          "requiredEntries":  [
                                                                  "META-INF/mods.toml",
-                                                                 "com/rheinmetal/TianshuLibsForgeCompatMod.class"
+                                                                 "com/rheinmetal/FoundryForgeCompatMod.class"
                                                              ],
                                          "blockedReason":  "Forge support is intentionally limited to the Forge 46 line (Minecraft \u003e=1.20 \u003c1.20.1); later targets are covered by Fabric/NeoForge."
                                      },
@@ -339,7 +339,7 @@
                                           "requiredEntries":  [
                                                                   "META-INF/mods.toml",
                                                                   "META-INF/neoforge.mods.toml",
-                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                                  "com/rheinmetal/FoundryMod.class"
                                                               ]
                                       },
                     "neoforge-1.20.1":  {
@@ -350,7 +350,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.20.2":  {
@@ -362,7 +362,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.20.3":  {
@@ -374,7 +374,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.20.4":  {
@@ -385,7 +385,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.20.5":  {
@@ -397,7 +397,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.20.6":  {
@@ -408,7 +408,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.21":  {
@@ -420,7 +420,7 @@
                                           "requiredEntries":  [
                                                                   "META-INF/mods.toml",
                                                                   "META-INF/neoforge.mods.toml",
-                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                                  "com/rheinmetal/FoundryMod.class"
                                                               ]
                                       },
                     "neoforge-1.21.1":  {
@@ -432,7 +432,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.21.2":  {
@@ -444,7 +444,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.21.3":  {
@@ -456,7 +456,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
     "neoforge-1.21.4":  {
@@ -468,7 +468,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
     "neoforge-1.21.5":  {
@@ -480,7 +480,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
     "neoforge-1.21.6":  {
@@ -492,7 +492,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
     "neoforge-1.21.7":  {
@@ -504,7 +504,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
     "neoforge-1.21.8":  {
@@ -516,7 +516,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.21.9":  {
@@ -528,7 +528,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-1.21.10":  {
@@ -540,7 +540,7 @@
                                              "requiredEntries":  [
                                                                      "META-INF/mods.toml",
                                                                      "META-INF/neoforge.mods.toml",
-                                                                     "com/rheinmetal/TianshuLibsMod.class"
+                                                                     "com/rheinmetal/FoundryMod.class"
                                                                  ]
                                          },
                     "neoforge-1.21.11":  {
@@ -552,7 +552,7 @@
                                              "requiredEntries":  [
                                                                      "META-INF/mods.toml",
                                                                      "META-INF/neoforge.mods.toml",
-                                                                     "com/rheinmetal/TianshuLibsMod.class"
+                                                                     "com/rheinmetal/FoundryMod.class"
                                                                  ]
                                          },
                     "neoforge-26.1":  {
@@ -564,7 +564,7 @@
                                           "requiredEntries":  [
                                                                   "META-INF/mods.toml",
                                                                   "META-INF/neoforge.mods.toml",
-                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                                  "com/rheinmetal/FoundryMod.class"
                                                               ]
                                       },
                     "neoforge-26.1.1":  {
@@ -576,7 +576,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-26.1.2":  {
@@ -588,7 +588,7 @@
                                             "requiredEntries":  [
                                                                     "META-INF/mods.toml",
                                                                     "META-INF/neoforge.mods.toml",
-                                                                    "com/rheinmetal/TianshuLibsMod.class"
+                                                                    "com/rheinmetal/FoundryMod.class"
                                                                 ]
                                         },
                     "neoforge-26.2":  {
@@ -600,7 +600,7 @@
                                           "requiredEntries":  [
                                                                   "META-INF/mods.toml",
                                                                   "META-INF/neoforge.mods.toml",
-                                                                  "com/rheinmetal/TianshuLibsMod.class"
+                                                                  "com/rheinmetal/FoundryMod.class"
                                                               ]
                                       }
                 }

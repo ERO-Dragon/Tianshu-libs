@@ -1,12 +1,12 @@
 简体中文 | [English](./README.md)
 
-# 天枢 AI 能力库 (Tianshu Libraries)
+# 百工 (Foundry)
 
 [CurseForge](https://www.curseforge.com/minecraft/mc-mods/tianshu-library/preview) | [Modrinth](https://modrinth.com/mod/tianshu-library) | [GitHub](https://github.com/ERO-Dragon/Tianshu-libs) | [Gitee](https://gitee.com/tianshu-ai/tianshu-libs)
 
 ---
 
-天枢 AI 能力库为 Minecraft 提供本地 AI 能力，包括大模型推理、语音识别和文本向量化。它作为 AI 驱动模组的核心依赖后端。
+百工（Foundry）为 Minecraft 提供本地 AI 能力，包括大模型推理、语音识别和文本向量化。它作为 AI 驱动模组的核心依赖后端。
 
 ## ⚠️ 注意事项
 
@@ -17,7 +17,7 @@
 
 ## ⚙️ 安装
 
-只需将下载的模组 JAR 文件（`tianshu_libs-x.x.x.jar`）放入您的 `.minecraft/mods` 文件夹中。
+只需将下载的模组 JAR 文件（`tianshu_foundry-x.x.x.jar`）放入您的 `.minecraft/mods` 文件夹中。
 
 ## 功能特性
 
